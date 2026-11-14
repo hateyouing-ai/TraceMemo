@@ -39,6 +39,10 @@ import type {
 } from '../shared/image-insight'
 import type { SystemOcrCapability, SystemOcrRequest, SystemOcrResult } from '../shared/system-ocr'
 import type {
+  ImageTextOcrRuntimeSnapshot,
+  ImageTextOcrStoredSettings
+} from '../shared/image-text-ocr-pipeline'
+import type {
   ImageTextIndexCountResult,
   ImageTextIndexRepairResult,
   ImageTextIndexStartOptions,
@@ -558,6 +562,11 @@ const api = {
     ipcRenderer.invoke('system-ocr:getCapability'),
   recognizeLocalImageText: (request: SystemOcrRequest): Promise<SystemOcrResult> =>
     ipcRenderer.invoke('system-ocr:recognize', request),
+  getImageTextOcrSettings: (): Promise<ImageTextOcrRuntimeSnapshot> =>
+    ipcRenderer.invoke('image-text-ocr:getSettings'),
+  setImageTextOcrSettings: (
+    patch: Partial<ImageTextOcrStoredSettings>
+  ): Promise<ImageTextOcrRuntimeSnapshot> => ipcRenderer.invoke('image-text-ocr:setSettings', patch),
 
   // 图片文字索引（微信图片 → 本地解密 → System OCR → 派生文本 → Knowledge）
   getImageTextIndexStatus: (): Promise<ImageTextIndexStatus> =>

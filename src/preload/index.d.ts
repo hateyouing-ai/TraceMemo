@@ -64,6 +64,10 @@ import type {
 } from '../shared/image-insight'
 import type { SystemOcrCapability, SystemOcrRequest, SystemOcrResult } from '../shared/system-ocr'
 import type {
+  ImageTextOcrRuntimeSnapshot,
+  ImageTextOcrStoredSettings
+} from '../shared/image-text-ocr-pipeline'
+import type {
   ImageTextIndexCountResult,
   ImageTextIndexRepairResult,
   ImageTextIndexStartOptions,
@@ -745,6 +749,10 @@ declare global {
       // 本地图片文字识别（System OCR，本地 Runtime，非 AI Provider）
       getSystemOcrCapability: () => Promise<SystemOcrCapability>
       recognizeLocalImageText: (request: SystemOcrRequest) => Promise<SystemOcrResult>
+      getImageTextOcrSettings: () => Promise<ImageTextOcrRuntimeSnapshot>
+      setImageTextOcrSettings: (
+        patch: Partial<ImageTextOcrStoredSettings>
+      ) => Promise<ImageTextOcrRuntimeSnapshot>
       getImageTextIndexStatus: () => Promise<ImageTextIndexStatus>
       countImageMessages: (sinceMs?: number) => Promise<ImageTextIndexCountResult>
       startImageTextIndex: (

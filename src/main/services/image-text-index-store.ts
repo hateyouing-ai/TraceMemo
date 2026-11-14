@@ -89,6 +89,12 @@ function artifactFromRow(row: Record<string, unknown>): ImageOcrArtifact {
   }
 }
 
+/** 一次批量提交里的 artifact（可空）+ binding。 */
+export interface ImageOcrCommitRecord {
+  artifact: ImageOcrArtifact | null
+  binding: ImageOcrBinding
+}
+
 /** 会话内「消息 → OCR 文本」，供 Knowledge 索引时解析（与语音 resolver 同构）。 */
 export interface ConversationImageOcrEntry {
   state: ImageOcrPersistedState
@@ -197,9 +203,9 @@ export class ImageTextIndexStore {
   }
 
   private readMeta(key: string): string | null {
-    const row = this.database
-      .prepare('SELECT value FROM image_ocr_meta WHERE key = ?')
-      .get(key) as Record<string, unknown> | undefined
+    const row = this.database.prepare('SELECT value FROM image_ocr_meta WHERE key = ?').get(key) as
+      | Record<string, unknown>
+      | undefined
     return row ? String(row.value) : null
   }
 
@@ -299,9 +305,7 @@ export class ImageTextIndexStore {
    * 与语音的 `withVoiceTranscript` 同构：在**主进程**把派生文本贴到消息上，
    * 再交给 Knowledge 索引，派生库不需要被 worker 打开。
    */
-  getConversationOcr(
-    conversationId: string
-  ): Map<string, ConversationImageOcrEntry> {
+  getConversationOcr(conversationId: string): Map<string, ConversationImageOcrEntry> {
     const rows = asRows(
       this.database
         .prepare(
@@ -446,7 +450,6 @@ export class ImageTextIndexStore {
     this.writeMeta('backfill_covered_to_ms', String(Math.floor(coveredToMs)))
   }
 
-
   readScanState(): Map<
     string,
     { state: string; imageTotal: number; processed: number; maxLocalId: number }
@@ -471,6 +474,41 @@ export class ImageTextIndexStore {
       })
     }
     return map
+  }
+
+  /**
+   * 一批 artifact / binding 和可选的 checkpoint 同一次事务提交。
+   *
+   * 崩溃、强关或断电时，要么整批可见，要么整批都还在（下次会重做这一小批）。
+   * 不会出现「checkpoint 已经跳过、结果却没落盘」的窗口。
+   */
+  commitDerivedBatch(input: {
+    records: ImageOcrCommitRecord[]
+    scan?: {
+      conversationId: string
+      state: 'done' | 'partial'
+      imageTotal: number
+      imageProcessed: number
+      maxLocalId: number
+    }
+  }): void {
+    if (!input.records.length && !input.scan) return
+    this.database.exec('BEGIN IMMEDIATE')
+    try {
+      for (const record of input.records) {
+        if (record.artifact) this.putArtifact(record.artifact)
+        this.putBinding(record.binding)
+      }
+      if (input.scan) this.writeScanState(input.scan)
+      this.database.exec('COMMIT')
+    } catch (error) {
+      try {
+        this.database.exec('ROLLBACK')
+      } catch {
+        // 事务可能还没真正开始。
+      }
+      throw error
+    }
   }
 
   writeScanState(input: {
@@ -513,6 +551,15 @@ export class ImageTextIndexStore {
    * 清理时**必须**先拿到它：OCR 文本早已被灌进 Knowledge 的 chunks / FTS，
    * 只删派生病不会让那些派生文字失效 —— 用户仍会从旧索引里搜到图片里的文字。
    */
+  conversationIdsWithBindingState(state: ImageOcrPersistedState): string[] {
+    const rows = asRows(
+      this.database
+        .prepare('SELECT DISTINCT conversation_id FROM image_ocr_bindings WHERE state = ?')
+        .all(state)
+    )
+    return rows.map((row) => String(row.conversation_id))
+  }
+
   conversationIdsWithOcr(): string[] {
     const rows = asRows(
       this.database.prepare('SELECT DISTINCT conversation_id FROM image_ocr_bindings').all()
@@ -590,7 +637,8 @@ export class ImageTextIndexStore {
   }
 
   /** 按状态聚合绑定数 —— 覆盖度与进度都从这里取，保证与库内真实一致。 */
-  countByState(): Record<string, number> {    const rows = asRows(
+  countByState(): Record<string, number> {
+    const rows = asRows(
       this.database
         .prepare('SELECT state, COUNT(*) AS total FROM image_ocr_bindings GROUP BY state')
         .all()

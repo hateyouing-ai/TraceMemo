@@ -21,6 +21,8 @@ asarUnpack:
   - node_modules/sherpa-onnx-*/**
   - node_modules/@napi-rs/system-ocr/**
   - node_modules/@napi-rs/system-ocr-*/**
+  - node_modules/onnxruntime-node/**
+  - node_modules/onnxruntime-common/**
 extraResources:
   # Keep the updater provider in every packaged Windows app. electron-builder also
   # regenerates this file during publish, using the same release configuration.
@@ -38,6 +40,7 @@ extraResources:
       - key/win32/x64/**
       - runtime/win32/**
       - wcdb/win32/x64/**
+      - ocr/rapidocr/**
       - '!wcdb/**/tm-wcdb-config-helper*'
   # 默认不打包helper
   # - from: resources/wcdb/win32/x64

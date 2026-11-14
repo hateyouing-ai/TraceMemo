@@ -5,6 +5,7 @@ import type {
   SystemOcrResult
 } from '../../../../../shared/system-ocr'
 import { Button } from '../../../components/ui'
+import { ImageTextOcrSettingsPanel } from '../../../components/search/ImageTextOcrSettingsPanel'
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024
 
@@ -152,6 +153,11 @@ export function LocalImageTextRecognition(): React.ReactElement {
         </p>
       ) : null}
 
+      <p className="local-ocr-runtime">
+        索引用的引擎、全力预设和并发在「设置 → 数据管理 → 本地索引」的图片文字索引卡片上。
+      </p>
+      <ImageTextOcrSettingsPanel />
+
       <label className={`local-ocr-upload ${state.image ? 'has-image' : ''}`}>
         <input
           type="file"
@@ -179,8 +185,9 @@ export function LocalImageTextRecognition(): React.ReactElement {
       </label>
 
       <p className="local-ocr-privacy">
-        使用本地 OCR 时，原始图片无需发送给 AI Provider，也不会写入本地缓存或知识库。如果后续继续使用云端
-        AI 分析，提取出的文字可能按当前 Provider 配置发送。
+        使用本地 OCR 时，原始图片无需发送给 AI
+        Provider，也不会写入本地缓存或知识库。如果后续继续使用云端 AI 分析，提取出的文字可能按当前
+        Provider 配置发送。
       </p>
 
       {state.error ? <p className="local-ocr-error">{state.error}</p> : null}
@@ -267,7 +274,9 @@ function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.addEventListener('load', () =>
-      typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('invalid image'))
+      typeof reader.result === 'string'
+        ? resolve(reader.result)
+        : reject(new Error('invalid image'))
     )
     reader.addEventListener('error', () => reject(reader.error || new Error('read failed')))
     reader.readAsDataURL(file)

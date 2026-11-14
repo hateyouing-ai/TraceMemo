@@ -1,3 +1,4 @@
+import os from 'node:os'
 import path from 'node:path'
 import { isWcdbDebugEnabled } from './wcdb-debug'
 import {
@@ -67,6 +68,8 @@ import { ImageKeyConfigService } from './services/image-key-config-service'
 import { AIProviderService } from './services/ai-provider-service'
 import { imageInsightService } from './services/image-insight-service'
 import { systemOcrService } from './services/system-ocr-service'
+import { ImageTextOcrController } from './services/image-text-ocr-controller'
+import type { ImageTextOcrStoredSettings } from '../shared/image-text-ocr-pipeline'
 import type {
   ImageAnalysisRequest,
   ImageAnalysisResponse,
@@ -1194,6 +1197,43 @@ app.whenReady().then(async () => {
    * 解密服务原本只在 `db:getImage`（用户点开某张图）里才懒加载，于是没点开过图片时
    * 全量回填会拿到 `null`。这里改成显式"按需确保"，凡是需要解密的路径都能自己建起来。
    */
+  const imageTextOcr = new ImageTextOcrController({
+    platform: process.platform,
+    logicalThreads: Math.max(1, os.cpus().length),
+    cpuModel: os.cpus()[0]?.model ?? '',
+    resourcesPath: process.resourcesPath,
+    cwd: process.cwd(),
+    userData: app.getPath('userData'),
+    loadSettings: (): ImageTextOcrStoredSettings => {
+      const settings = loadSettings()
+      return {
+        engine: settings.imageTextOcrEngine,
+        preset: settings.imageTextOcrPreset,
+        ocrConcurrency: settings.imageTextOcrConcurrency,
+        prepareConcurrency: settings.imageTextPrepareConcurrency
+      }
+    },
+    saveSettings: (settings) => {
+      updateSettings({
+        imageTextOcrEngine: settings.engine,
+        imageTextOcrPreset: settings.preset,
+        imageTextOcrConcurrency: settings.ocrConcurrency,
+        imageTextPrepareConcurrency: settings.prepareConcurrency
+      })
+    },
+    systemRecognize: async (imageDataUrl) => {
+      const result = await systemOcrService.recognize({ imageDataUrl })
+      return {
+        success: result.success,
+        text: result.text,
+        language: result.language,
+        ...(result.errorCode ? { errorCode: result.errorCode } : {})
+      }
+    },
+    systemCapability: () => systemOcrService.getCapability(),
+    decryptMaterial: () =>
+      ensureImageDecryptService()?.workerMaterial() ?? { aesKey: '', xorKey: 0 }
+  })
   imageTextIndexService.bind({
     databaseRoot: join(app.getPath('userData'), 'image-text-index'),
     resolveAccountId: () =>
@@ -1241,14 +1281,14 @@ app.whenReady().then(async () => {
     decryptService: () => ensureImageDecryptService(),
     capability: () => systemOcrService.getCapability(),
     /**
-     * OCR 并发度的运行时覆盖；不设置则走 `DEFAULT_IMAGE_TEXT_OCR_CONCURRENCY`。
-     *
-     * 同一份二进制、同一批图片只改这一个数，才能把并发度当作对照变量来比较。
-     * 非法值会被 `resolveImageTextOcrConcurrency` 收敛掉。
+     * 吞吐配置在每次 pass 开始时读一次。
+     * `TRACEMEMO_OCR_CONCURRENCY` 仍是识别队列深度的对照旋钮，由控制器收进快路径。
      */
-    ...(process.env.TRACEMEMO_OCR_CONCURRENCY
-      ? { ocrConcurrency: Number(process.env.TRACEMEMO_OCR_CONCURRENCY) }
-      : {}),
+    readFastPipelineConfig: () => imageTextOcr.pipeline(),
+    ocrReady: () => imageTextOcr.ocrReady(),
+    currentProvenance: () => imageTextOcr.currentProvenance(),
+    engineNotice: () => imageTextOcr.engineNotice(),
+    prepareOffThread: (request) => imageTextOcr.prepareOffThread(request),
     /** 低频性能画像：只写性能数字，不含图片内容 / 路径 / 会话标识。 */
     logStageProfile: (profile) =>
       appLogger.write({
@@ -1257,15 +1297,7 @@ app.whenReady().then(async () => {
         message: '图片文字索引性能画像',
         details: { ...profile }
       }),
-    recognize: async (imageDataUrl) => {
-      const result = await systemOcrService.recognize({ imageDataUrl })
-      return {
-        success: result.success,
-        text: result.text,
-        language: result.language,
-        ...(result.errorCode ? { errorCode: result.errorCode } : {})
-      }
-    },
+    recognize: (imageDataUrl) => imageTextOcr.recognize(imageDataUrl),
     // 会话图片全部处理完 → 重建该会话索引，OCR 文本才可被 search_messages 检索。
     onConversationIndexed: (conversationId) =>
       knowledgeSearchService?.indexImageOcr(conversationId) ?? Promise.resolve()
@@ -2641,6 +2673,11 @@ app.whenReady().then(async () => {
   })
   // ---- 图片文字索引（本地 System OCR 派生文本，非 AI Provider）----
   ipcMain.handle('image-text-index:getStatus', () => imageTextIndexService.getStatus())
+  ipcMain.handle('image-text-ocr:getSettings', () => imageTextOcr.snapshot())
+  ipcMain.handle('image-text-ocr:setSettings', (_, patch: Partial<ImageTextOcrStoredSettings>) => {
+    imageTextOcr.updateSettings(patch ?? {})
+    return imageTextOcr.snapshot()
+  })
   /**
    * 点击索引前的快速统计：纯 SQL COUNT，**不解密任何图片**。
    * 这是「先告诉用户有多少张图片再决定是否开始」能足够快的前提。
