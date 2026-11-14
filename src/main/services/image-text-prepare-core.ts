@@ -19,6 +19,8 @@ export interface ImagePrepareJob {
   aesKey: string
   xorKey: number
   preferThumbnail?: boolean
+  /** 目录索引已经定位到的文件。有它就不再搜目录。 */
+  datPath?: string
 }
 
 export interface ImagePrepareCoreResult {
@@ -37,7 +39,7 @@ export function sessionDirectoryName(sessionId: string): string {
   return createHash('md5').update(value).digest('hex')
 }
 
-function normalizeDatBase(value: string): string {
+export function normalizeDatBase(value: string): string {
   const lower = String(value || '')
     .trim()
     .toLowerCase()
@@ -250,6 +252,16 @@ export function decryptWeChatDatV4(
 }
 
 export function prepareImageCore(job: ImagePrepareJob): ImagePrepareCoreResult {
+  if (job.datPath) {
+    const decryptStarted = Date.now()
+    let bytes: Buffer | null = null
+    try {
+      bytes = decryptWeChatDatV4(readFileSync(job.datPath), job.aesKey, job.xorKey)
+    } catch {
+      bytes = null
+    }
+    return { datPath: job.datPath, bytes, locateMs: 0, decryptMs: Date.now() - decryptStarted }
+  }
   const locateStarted = Date.now()
   const datPath = locateWeChatImage(job)
   const locateMs = Date.now() - locateStarted

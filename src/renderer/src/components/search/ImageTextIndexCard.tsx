@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -69,10 +69,14 @@ export function ImageTextIndexCard({ dbReady, onNotice }: ImageTextIndexCardProp
    * 先跑"最近 1 天"这种小窗口才能证明链路真的通了。`0` = 全部历史。
    */
   const [rangeDays, setRangeDays] = useState('0')
-  const sinceMs = useMemo(() => {
-    const days = Number(rangeDays)
-    return Number.isFinite(days) && days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : undefined
-  }, [rangeDays])
+  const [sinceMs, setSinceMs] = useState<number | undefined>(undefined)
+  const changeRange = (value: string): void => {
+    setRangeDays(value)
+    const days = Number(value)
+    setSinceMs(
+      Number.isFinite(days) && days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : undefined
+    )
+  }
 
   // 进页面 / 切换范围时统计一次（数字必须与当前窗口一致，否则确认弹窗会说谎）。
   useEffect(() => {
@@ -187,10 +191,7 @@ export function ImageTextIndexCard({ dbReady, onNotice }: ImageTextIndexCardProp
 
   return (
     <>
-      <section
-        className={`ai-search-knowledge-card ${visualState}`}
-        aria-label="图片文字索引状态"
-      >
+      <section className={`ai-search-knowledge-card ${visualState}`} aria-label="图片文字索引状态">
         <div className="ai-search-knowledge-heading">
           <div className="ai-search-knowledge-heading-text">
             <span className="ai-search-knowledge-kicker">IMAGE TEXT INDEX</span>
@@ -228,8 +229,11 @@ export function ImageTextIndexCard({ dbReady, onNotice }: ImageTextIndexCardProp
             </div>
             <div className="ai-search-knowledge-row">
               <span className="ai-search-knowledge-label">处理范围</span>
-              <Select value={rangeDays} onValueChange={setRangeDays}>
-                <SelectTrigger data-testid="image-text-index-range" className="h-6 w-[86px] text-[10px]">
+              <Select value={rangeDays} onValueChange={changeRange}>
+                <SelectTrigger
+                  data-testid="image-text-index-range"
+                  className="h-6 w-[86px] text-[10px]"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -291,15 +295,16 @@ export function ImageTextIndexCard({ dbReady, onNotice }: ImageTextIndexCardProp
               样本还不足时如实说"计算中"，不要编一个数 —— 全量回填要跑几小时，
               一个假 ETA 比没有 ETA 更糟。
             */}
-            <p
-              className="ai-search-knowledge-pass-line"
-              data-testid="image-text-index-rate"
-            >
+            <p className="ai-search-knowledge-pass-line" data-testid="image-text-index-rate">
               {`当前速度：${
                 typeof progress.speedPerSec === 'number' && progress.speedPerSec > 0
                   ? `约 ${progress.speedPerSec.toFixed(1)} 张/秒`
                   : '计算中'
-              } · 预计剩余：${formatEta(progress.etaMs)}`}
+              } · 预计剩余：${formatEta(progress.etaMs)}${
+                typeof progress.localFiles === 'number'
+                  ? ` · 本地有原图 ${progress.localFiles.toLocaleString()} · 无原图 ${(progress.localMissing ?? 0).toLocaleString()}`
+                  : ''
+              }`}
             </p>
           </div>
         )}
@@ -315,7 +320,9 @@ export function ImageTextIndexCard({ dbReady, onNotice }: ImageTextIndexCardProp
             </div>
             <div className="ai-search-knowledge-row">
               <span className="ai-search-knowledge-label">没有文字</span>
-              <strong className="ai-search-knowledge-value">{coverage.empty.toLocaleString()}</strong>
+              <strong className="ai-search-knowledge-value">
+                {coverage.empty.toLocaleString()}
+              </strong>
             </div>
             <div className="ai-search-knowledge-row">
               <span className="ai-search-knowledge-label">图片已清理</span>
@@ -354,10 +361,7 @@ export function ImageTextIndexCard({ dbReady, onNotice }: ImageTextIndexCardProp
         )}
         {/* 「处理过但一条都没成功」= 索引异常，绝不能显示成"已建立"。 */}
         {systemicFailure && (
-          <p
-            className="ai-search-knowledge-error"
-            data-testid="image-text-index-systemic-failure"
-          >
+          <p className="ai-search-knowledge-error" data-testid="image-text-index-systemic-failure">
             {`${(coverage?.failed ?? 0).toLocaleString()} 条处理失败，成功识别 0 条 —— 当前无法搜索图片中的文字。`}
           </p>
         )}

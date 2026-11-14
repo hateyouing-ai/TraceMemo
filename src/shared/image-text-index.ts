@@ -583,6 +583,13 @@ export interface ImageTextIndexProgress {
    * 它不是失败：索引仍在跑。
    */
   engineNotice?: string
+  /**
+   * 本次 pass 已经扫过的消息里，目录索引确认本地有原图的张数。
+   * 没有建目录索引时不出现。
+   */
+  localFiles?: number
+  /** 本次 pass 已经确认本地没有原图、因此直接跳过的张数。 */
+  localMissing?: number
 }
 
 /**

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   Button,
   DropdownMenu,
@@ -21,6 +21,7 @@ import {
   imageTextStateTone
 } from '../../../../shared/image-text-index'
 import { useImageTextIndexStatus } from './hooks/useImageTextIndexStatus'
+import { ImageTextOcrSettingsPanel } from './ImageTextOcrSettingsPanel'
 import {
   IndexStatusBadge,
   type IndexStatusTone
@@ -71,10 +72,14 @@ export function ImageTextIndexSummary({
    * 先跑「最近 1 天」才能证明链路真的通了。
    */
   const [rangeDays, setRangeDays] = useState('0')
-  const sinceMs = useMemo(() => {
-    const days = Number(rangeDays)
-    return Number.isFinite(days) && days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : undefined
-  }, [rangeDays])
+  const [sinceMs, setSinceMs] = useState<number | undefined>(undefined)
+  const changeRange = (value: string): void => {
+    setRangeDays(value)
+    const days = Number(value)
+    setSinceMs(
+      Number.isFinite(days) && days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : undefined
+    )
+  }
 
   useEffect(() => {
     if (!dbReady) return
@@ -123,6 +128,12 @@ export function ImageTextIndexSummary({
         <IndexStatusBadge label={stateLabel} tone={tone} />
       </header>
 
+      <ImageTextOcrSettingsPanel
+        speedPerSec={progress?.speedPerSec}
+        localFiles={progress?.localFiles}
+        localMissing={progress?.localMissing}
+      />
+
       {/* 未建立：先给一个可核对的图片量，再让用户决定跑不跑 */}
       {!established && !running ? (
         <>
@@ -142,7 +153,7 @@ export function ImageTextIndexSummary({
           </div>
           <div className="local-index-inline">
             <span className="local-index-stat-label">处理范围</span>
-            <Select value={rangeDays} onValueChange={setRangeDays}>
+            <Select value={rangeDays} onValueChange={changeRange}>
               <SelectTrigger className="h-7 w-[110px] text-xs">
                 <SelectValue />
               </SelectTrigger>

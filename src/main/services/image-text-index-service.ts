@@ -69,6 +69,8 @@ import {
   type ImageOcrCommitRecord
 } from './image-text-index-store'
 import type { ImagePrepareCoreResult } from './image-text-prepare-core'
+import { ImageFileCatalog, wechatImageRootsExist } from './image-file-catalog'
+import { dirname, join } from 'node:path'
 
 /** 图片消息的数据 URL 前缀。 */
 const MIME_BY_FORMAT: Record<string, string> = {
@@ -156,6 +158,7 @@ export interface ImageTextIndexServiceDeps {
     sessionMd5: string
     createTime?: number
     preferThumbnail?: boolean
+    datPath?: string
   }) => Promise<ImagePrepareCoreResult>
   /**
    * OCR 并发度。不传则用 `DEFAULT_IMAGE_TEXT_OCR_CONCURRENCY`，
@@ -421,6 +424,16 @@ export class ImageTextIndexService {
   private fastYield = true
   /** 还没进事务的结算。体积不超过 `fastPersistBatchSize`。 */
   private persistBuffer: SettleInput[] = []
+  /** 本遍微信图片目录索引。没有 msg/attach 等目录时为 null，测试继续走注入的解密。 */
+  private fileCatalog: ImageFileCatalog | null = null
+  private catalogAccountDir = ''
+  /** 本遍已经对照目录索引看过的消息。 */
+  private catalogSeen = { withFile: 0, missing: 0 }
+  /**
+   * 目录里新出现了文件。这些会话以前记过 image_missing，
+   * 即使分段已经 complete、水位也没涨，也要再打开核对一次。
+   */
+  private recheckMissingConversations = new Set<string>()
   /**
    * 当前会话是否产生了会改变 Knowledge 可搜索内容的变化（见 `settle()` 里的判定）。
    *
@@ -504,6 +517,7 @@ export class ImageTextIndexService {
     }
     this.conversationOcrCache.clear()
     this.store?.close()
+    this.closeFileCatalog()
     this.store = null
     this.storeAccountId = ''
     this.accountKey = ''
@@ -746,6 +760,9 @@ export class ImageTextIndexService {
       ...this.rateSnapshot(coverage.processed, total),
       ...(this.lastError ? { lastError: this.lastError } : {}),
       ...(this.deps.engineNotice?.() ? { engineNotice: this.deps.engineNotice() } : {}),
+      ...(this.fileCatalog
+        ? { localFiles: this.catalogSeen.withFile, localMissing: this.catalogSeen.missing }
+        : {}),
       // 阶段提示只在"真的在做这件事"时给：运行/暂停时报当前分段；整体完成时报完成。
       // 其余情况（idle / cancelled 且未完成）不给 —— 宁可不说，也不给一句过期的阶段。
       ...(this.running || this.runState === 'paused'
@@ -1002,6 +1019,110 @@ export class ImageTextIndexService {
    * 把 OCR 交出去之后主线程才能立刻去 prepare 下一张，让同步段与异步 OCR 重叠 ——
    * 这是吞吐提升的真正来源，而不是把 SQLite 也并发化。
    */
+  private closeFileCatalog(): void {
+    this.fileCatalog?.close()
+    this.fileCatalog = null
+    this.catalogAccountDir = ''
+    this.recheckMissingConversations = new Set()
+  }
+
+  /** 有微信图片目录才建索引。测试用的假目录不会进来，避免把注入的解密绕开。 */
+  private syncFileCatalog(): void {
+    const accountDir = this.deps.resolveAccountRoot?.() || ''
+    if (!accountDir || !wechatImageRootsExist(accountDir)) {
+      this.closeFileCatalog()
+      return
+    }
+    try {
+      if (!this.accountKey) return
+      const databasePath = join(dirname(this.accountKey), 'image-file-catalog.sqlite')
+      if (!this.fileCatalog || this.catalogAccountDir !== accountDir) {
+        this.closeFileCatalog()
+        this.fileCatalog = new ImageFileCatalog(databasePath)
+        this.catalogAccountDir = accountDir
+      }
+      const synced = this.fileCatalog.sync(accountDir)
+      const store = this.ensureStore()
+      this.recheckMissingConversations =
+        synced.rescanned > 0 || synced.removed > 0
+          ? new Set(store?.conversationIdsWithBindingState('image_missing') ?? [])
+          : new Set()
+    } catch (error) {
+      console.warn(
+        `[ImageTextIndex] image catalog sync failed: ${error instanceof Error ? error.message : String(error)}`
+      )
+      this.closeFileCatalog()
+    }
+  }
+
+  /**
+   * undefined = 没用目录索引；null = 索引确认没有这个文件；string = 已知路径。
+   */
+  private catalogPathFor(md5?: string, datName?: string): string | null | undefined {
+    if (!this.fileCatalog?.active) return undefined
+    if (!String(md5 || '').trim() && !String(datName || '').trim()) return undefined
+    return this.fileCatalog.lookup(md5, datName, true)
+  }
+
+  private shouldSkipKnown(
+    known: ConversationImageOcrEntry | undefined,
+    message: chat.FormattedMessage
+  ): boolean {
+    if (!known || !isTerminalImageOcrState(known.state)) return false
+    if (known.state !== 'image_missing' || !this.fileCatalog?.active) return true
+    const imageContent =
+      message.contentData?.type === 'image'
+        ? (message.contentData as { md5?: string; datName?: string })
+        : undefined
+    // 上次没有原图，这次目录里出现了 → 不要跳过，让增量补上。
+    return this.catalogPathFor(imageContent?.md5, imageContent?.datName) == null
+  }
+
+  private noteCatalogCoverage(messages: chat.FormattedMessage[]): void {
+    if (!this.fileCatalog?.active) return
+    for (const message of messages) {
+      const imageContent =
+        message.contentData?.type === 'image'
+          ? (message.contentData as { md5?: string; datName?: string })
+          : undefined
+      const hit = this.catalogPathFor(imageContent?.md5, imageContent?.datName)
+      if (typeof hit === 'string') this.catalogSeen.withFile += 1
+      else if (hit === null) this.catalogSeen.missing += 1
+    }
+  }
+
+  /** 路径已经由目录索引给出，只解密这一份，不再搜目录。 */
+  private prepareKnownFile(
+    datPath: string,
+    conversationId: string,
+    provenance: ImageOcrProvenance
+  ): PreparedImage {
+    const decrypt = this.deps.decryptService?.() ?? null
+    if (!decrypt) {
+      return { kind: 'short-circuit', state: 'decrypt_unavailable', text: '', imageIdentity: null }
+    }
+    const startedAt = this.now()
+    let bytes: Buffer | null = null
+    try {
+      bytes = decrypt.decryptImage(datPath)
+    } catch {
+      bytes = null
+    }
+    this.stageStats.locate.record(0)
+    this.stageStats.decrypt.record(this.now() - startedAt)
+    if (!bytes || bytes.length === 0) {
+      return { kind: 'short-circuit', state: 'decrypt_failed', text: '', imageIdentity: null }
+    }
+    return (
+      this.finishPrepared(bytes, conversationId, provenance) ?? {
+        kind: 'short-circuit',
+        state: 'decode_failed',
+        text: '',
+        imageIdentity: null
+      }
+    )
+  }
+
   private prepareImage(
     message: chat.FormattedMessage,
     conversationId: string,
@@ -1026,6 +1147,15 @@ export class ImageTextIndexService {
     // 图片消息缺少定位字段：连"去哪找文件"都不知道，属消息侧缺失而非 OCR 失败。
     if (!imageContent?.md5 && !imageContent?.datName) {
       return { kind: 'short-circuit', state: 'metadata_missing', text: '', imageIdentity: null }
+    }
+
+    const catalogPath = this.catalogPathFor(imageContent?.md5, imageContent?.datName)
+    if (catalogPath === null) {
+      this.stageStats.locate.record(0)
+      return { kind: 'short-circuit', state: 'image_missing', text: '', imageIdentity: null }
+    }
+    if (typeof catalogPath === 'string') {
+      return this.prepareKnownFile(catalogPath, conversationId, provenance)
     }
 
     const locateStartedAt = this.now()
@@ -1320,7 +1450,7 @@ export class ImageTextIndexService {
 
         // 派生库里已有终态结果 → 复用（含"无文字"/"图片缺失"），不重复劳动。
         const known = ocrByMessage.get(messageId)
-        if (known && isTerminalImageOcrState(known.state)) {
+        if (this.shouldSkipKnown(known, message)) {
           cursor += 1
           processed += 1
           continue
@@ -1458,7 +1588,7 @@ export class ImageTextIndexService {
         const message = batch[cursor]
         const messageId = sourceMessageId(message)
         const known = ocrByMessage.get(messageId)
-        if (known && isTerminalImageOcrState(known.state)) {
+        if (this.shouldSkipKnown(known, message)) {
           cursor += 1
           processed += 1
           continue
@@ -1533,11 +1663,42 @@ export class ImageTextIndexService {
     conversationId: string,
     provenance: ImageOcrProvenance
   ): Promise<PreparedImage> {
-    const offThread = this.deps.prepareOffThread
     const imageContent =
       message.contentData?.type === 'image'
         ? (message.contentData as { md5?: string; datName?: string })
         : undefined
+    const catalogPath = this.catalogPathFor(imageContent?.md5, imageContent?.datName)
+    if (catalogPath === null) {
+      this.stageStats.locate.record(0)
+      return { kind: 'short-circuit', state: 'image_missing', text: '', imageIdentity: null }
+    }
+    if (typeof catalogPath === 'string') {
+      const offThread = this.deps.prepareOffThread
+      const accountDir = this.deps.resolveAccountRoot?.() || ''
+      if (offThread && accountDir) {
+        try {
+          const prepared = await offThread({
+            md5: imageContent?.md5,
+            datName: imageContent?.datName,
+            accountDir,
+            sessionMd5: conversationId,
+            createTime: message.createTime,
+            preferThumbnail: true,
+            datPath: catalogPath
+          })
+          if (prepared.bytes && prepared.bytes.length > 0) {
+            this.stageStats.locate.record(prepared.locateMs)
+            this.stageStats.decrypt.record(prepared.decryptMs)
+            const finished = this.finishPrepared(prepared.bytes, conversationId, provenance)
+            if (finished) return finished
+          }
+        } catch {
+          // 线程失败就在主进程解密这一条已知路径。
+        }
+      }
+      return this.prepareKnownFile(catalogPath, conversationId, provenance)
+    }
+    const offThread = this.deps.prepareOffThread
     const accountDir = this.deps.resolveAccountRoot?.() || ''
     if (offThread && accountDir && (imageContent?.md5 || imageContent?.datName)) {
       try {
@@ -1674,6 +1835,8 @@ export class ImageTextIndexService {
       return
     }
     this.running = true
+    this.catalogSeen = { withFile: 0, missing: 0 }
+    this.syncFileCatalog()
 
     // 进入图片流水线之前的一次性成本：单列出来，避免被摊进"每张图片"。
     const preLoopStartedAt = this.now()
@@ -1823,7 +1986,26 @@ export class ImageTextIndexService {
         if (interrupted) break
       }
 
-      if (!shouldScan) continue
+      if (!shouldScan) {
+        // 分段已经扫完，但磁盘上新出现了原先缺失的原图。只重开那些会话。
+        if (this.recheckMissingConversations.size) {
+          const rechecked = await this.processWindow({
+            window: { sinceMs: segment.startMs, beforeMs: segment.endMs },
+            incremental: false,
+            contacts,
+            provenance,
+            store,
+            budget,
+            scanState,
+            preLoopState,
+            marksConversationDone: true,
+            onlyConversationIds: this.recheckMissingConversations,
+            replaceProcessed: true
+          })
+          if (rechecked.interrupted || rechecked.truncated) break
+        }
+        continue
+      }
 
       this.currentPhase = windowed ? 'incremental' : segment.tier
       if (!windowed) store.writeBackfillTierState(segment.tier, 'running')
@@ -1966,6 +2148,13 @@ export class ImageTextIndexService {
     preLoopState: { captured: boolean }
     /** 本窗口扫完是否意味着该会话**全部**图片都已定态（最后一个分段）。 */
     marksConversationDone: boolean
+    /** 只重开这些会话。目录索引发现新文件时用，避免把已完成分段整段重扫。 */
+    onlyConversationIds?: Set<string>
+    /**
+     * 重开时 processed 取较大值，而不是把「这次又跳过的终态」再加一遍。
+     * 否则已经记过的条数会被翻倍，进度会提前变成 100%。
+     */
+    replaceProcessed?: boolean
   }): Promise<{ interrupted: boolean; imageCount: number; truncated: boolean }> {
     const { incremental, contacts, provenance, store, budget, scanState } = input
     let imageCount = 0
@@ -1987,6 +2176,7 @@ export class ImageTextIndexService {
       }
 
       const conversationId = contact.md5
+      if (input.onlyConversationIds && !input.onlyConversationIds.has(conversationId)) continue
       const previous = scanState.get(conversationId)
       /**
        * 会话级准备：水位 / 计数 / 让路 / 读消息。
@@ -2114,6 +2304,7 @@ export class ImageTextIndexService {
         continue
       }
       imageCount += imageMessages.length
+      this.noteCatalogCoverage(imageMessages)
       /**
        * 水位取**实际读到的**消息里最大的 local_id，而不是源侧水位：
        * 万一在我们查水位之后、读消息之前又落了一条新图，用观测值会让下一轮
@@ -2186,7 +2377,9 @@ export class ImageTextIndexService {
            * 于是总进度会突然跳到接近 100% —— 那是这个功能最不能犯的谎。
            */
           imageTotal: watermark?.count ?? previous?.imageTotal ?? imageMessages.length,
-          imageProcessed: processedInConversation,
+          imageProcessed: input.replaceProcessed
+            ? Math.max(previous?.processed ?? 0, processedInConversation)
+            : processedInConversation,
           maxLocalId: observedMaxLocalId
         })
         scanState.set(conversationId, {
@@ -2204,7 +2397,9 @@ export class ImageTextIndexService {
         scanState,
         conversationId,
         watermark,
-        processed: (previous?.processed ?? 0) + processedInConversation,
+        processed: input.replaceProcessed
+          ? Math.max(previous?.processed ?? 0, processedInConversation)
+          : (previous?.processed ?? 0) + processedInConversation,
         marksConversationDone: input.marksConversationDone,
         observedMaxLocalId
       })
@@ -2415,6 +2610,7 @@ export class ImageTextIndexService {
      * 否则「清理成功」之后还留着一个空库句柄，Windows 上也会妨碍目录删除。
      */
     this.store?.close()
+    this.closeFileCatalog()
     this.store = null
     this.storeAccountId = ''
     this.accountKey = ''

@@ -551,6 +551,15 @@ export class ImageTextIndexStore {
    * 清理时**必须**先拿到它：OCR 文本早已被灌进 Knowledge 的 chunks / FTS，
    * 只删派生病不会让那些派生文字失效 —— 用户仍会从旧索引里搜到图片里的文字。
    */
+  conversationIdsWithBindingState(state: ImageOcrPersistedState): string[] {
+    const rows = asRows(
+      this.database
+        .prepare('SELECT DISTINCT conversation_id FROM image_ocr_bindings WHERE state = ?')
+        .all(state)
+    )
+    return rows.map((row) => String(row.conversation_id))
+  }
+
   conversationIdsWithOcr(): string[] {
     const rows = asRows(
       this.database.prepare('SELECT DISTINCT conversation_id FROM image_ocr_bindings').all()

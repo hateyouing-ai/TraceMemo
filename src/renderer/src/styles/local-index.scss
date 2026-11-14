@@ -89,6 +89,13 @@
   color: var(--wxex-text-primary);
 }
 
+.local-index-ocr-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
 .local-index-card-title p {
   margin: 0;
   color: var(--wxex-text-secondary);

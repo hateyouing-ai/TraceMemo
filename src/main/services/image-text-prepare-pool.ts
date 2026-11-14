@@ -17,6 +17,7 @@ export interface ImagePrepareRequest {
   sessionMd5: string
   createTime?: number
   preferThumbnail?: boolean
+  datPath?: string
   fault?: 'exit'
 }
 
@@ -85,6 +86,7 @@ export class ImageTextPreparePool {
       sessionMd5: request.sessionMd5,
       createTime: request.createTime,
       preferThumbnail: request.preferThumbnail !== false,
+      ...(request.datPath ? { datPath: request.datPath } : {}),
       aesKey: material.aesKey,
       xorKey: material.xorKey,
       ...(request.fault ? { fault: request.fault } : {})
