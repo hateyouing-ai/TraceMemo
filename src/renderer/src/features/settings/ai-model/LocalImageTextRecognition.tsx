@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
+  ImageTextOcrEnginePreference,
+  ImageTextOcrPreset,
+  ImageTextOcrRuntimeSnapshot
+} from '../../../../../shared/image-text-ocr-pipeline'
+import type {
   SystemOcrCapability,
   SystemOcrEngine,
   SystemOcrResult
@@ -34,6 +39,7 @@ interface LocalOcrState {
  */
 export function LocalImageTextRecognition(): React.ReactElement {
   const [capability, setCapability] = useState<SystemOcrCapability | null>(null)
+  const [ocrSettings, setOcrSettings] = useState<ImageTextOcrRuntimeSnapshot | null>(null)
   const [state, setState] = useState<LocalOcrState>({ status: 'idle' })
 
   useEffect(() => {
@@ -50,6 +56,36 @@ export function LocalImageTextRecognition(): React.ReactElement {
       alive = false
     }
   }, [])
+
+  useEffect(() => {
+    const read = window.api.getImageTextOcrSettings
+    if (typeof read !== 'function') return
+    let alive = true
+    void read()
+      .then((value) => {
+        if (alive) setOcrSettings(value)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const updateOcrSettings = useCallback(
+    (patch: {
+      engine?: ImageTextOcrEnginePreference
+      preset?: ImageTextOcrPreset
+      ocrConcurrency?: number
+      prepareConcurrency?: number
+    }): void => {
+      const write = window.api.setImageTextOcrSettings
+      if (typeof write !== 'function') return
+      void write(patch)
+        .then((value) => setOcrSettings(value))
+        .catch(() => undefined)
+    },
+    []
+  )
 
   const selectImage = useCallback(async (file: File): Promise<void> => {
     const extension = file.name.split('.').pop()?.toLowerCase()
@@ -152,6 +188,74 @@ export function LocalImageTextRecognition(): React.ReactElement {
         </p>
       ) : null}
 
+      <div className="local-ocr-controls">
+        <label>
+          索引引擎
+          <select
+            aria-label="索引引擎"
+            value={ocrSettings?.settings.engine ?? 'auto'}
+            onChange={(event) =>
+              updateOcrSettings({ engine: event.target.value as ImageTextOcrEnginePreference })
+            }
+          >
+            <option value="auto">自动（优先 GPU，失败回退系统 OCR）</option>
+            <option value="gpu">GPU（RapidOCR / DirectML）</option>
+            <option value="system">系统 OCR</option>
+          </select>
+        </label>
+        <label>
+          性能预设
+          <select
+            aria-label="性能预设"
+            value={ocrSettings?.settings.preset ?? 'auto'}
+            onChange={(event) =>
+              updateOcrSettings({ preset: event.target.value as ImageTextOcrPreset })
+            }
+          >
+            <option value="auto">自动（i5-14600K 用全力）</option>
+            <option value="full-power">全力（针对此台电脑）</option>
+            <option value="balanced">均衡</option>
+          </select>
+        </label>
+        <label>
+          识别并发
+          <input
+            aria-label="识别并发"
+            type="number"
+            min={0}
+            max={32}
+            value={ocrSettings?.settings.ocrConcurrency ?? 0}
+            onChange={(event) => updateOcrSettings({ ocrConcurrency: Number(event.target.value) })}
+          />
+        </label>
+        <label>
+          解密并发
+          <input
+            aria-label="解密并发"
+            type="number"
+            min={0}
+            max={16}
+            value={ocrSettings?.settings.prepareConcurrency ?? 0}
+            onChange={(event) =>
+              updateOcrSettings({ prepareConcurrency: Number(event.target.value) })
+            }
+          />
+        </label>
+      </div>
+      <p className="local-ocr-runtime">
+        {ocrSettings?.resolved.summary ??
+          '并发填 0 表示自动。在这台 i5-14600K + RTX 4060 Ti 上，自动会套用全力参数。'}
+      </p>
+      {ocrSettings?.fallbackNotice ? (
+        <p className="local-ocr-notice">{ocrSettings.fallbackNotice}</p>
+      ) : null}
+      {ocrSettings ? (
+        <p className="local-ocr-runtime">
+          当前实际引擎：{ocrSettings.activeEngineLabel}
+          {ocrSettings.gpuMessage ? ` · ${ocrSettings.gpuMessage}` : ''}
+        </p>
+      ) : null}
+
       <label className={`local-ocr-upload ${state.image ? 'has-image' : ''}`}>
         <input
           type="file"
@@ -179,8 +283,9 @@ export function LocalImageTextRecognition(): React.ReactElement {
       </label>
 
       <p className="local-ocr-privacy">
-        使用本地 OCR 时，原始图片无需发送给 AI Provider，也不会写入本地缓存或知识库。如果后续继续使用云端
-        AI 分析，提取出的文字可能按当前 Provider 配置发送。
+        使用本地 OCR 时，原始图片无需发送给 AI
+        Provider，也不会写入本地缓存或知识库。如果后续继续使用云端 AI 分析，提取出的文字可能按当前
+        Provider 配置发送。
       </p>
 
       {state.error ? <p className="local-ocr-error">{state.error}</p> : null}
@@ -267,7 +372,9 @@ function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.addEventListener('load', () =>
-      typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('invalid image'))
+      typeof reader.result === 'string'
+        ? resolve(reader.result)
+        : reject(new Error('invalid image'))
     )
     reader.addEventListener('error', () => reject(reader.error || new Error('read failed')))
     reader.readAsDataURL(file)

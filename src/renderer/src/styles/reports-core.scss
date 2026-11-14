@@ -1680,6 +1680,26 @@
   color: var(--wxex-brand);
 }
 
+.local-ocr-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  select,
+  input {
+    min-height: 32px;
+    padding: 4px 8px;
+  }
+}
+
 .local-ocr-notice {
   border-left: 3px solid var(--wxex-danger);
   padding: 9px 11px;

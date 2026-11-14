@@ -14,12 +14,14 @@ export default defineConfig({
           reportTemplateTest: resolve('src/main/report-template-test-entry.ts'),
           queryAgentPoc: resolve('src/main/query-agent-poc-entry.ts'),
           voiceRecognitionWorker: resolve('src/main/voice-pipeline/voice-recognition-worker.ts'),
-          knowledgeWorker: resolve('src/main/knowledge/knowledge-worker.ts')
+          knowledgeWorker: resolve('src/main/knowledge/knowledge-worker.ts'),
+          imageTextPrepareWorker: resolve('src/main/services/image-text-prepare-worker.ts'),
+          gpuOcrWorker: resolve('src/main/services/gpu-ocr/gpu-ocr-worker.ts')
         },
         output: {
           entryFileNames: '[name].js'
         },
-        external: ['koffi', 'sherpa-onnx-node', '@napi-rs/system-ocr']
+        external: ['koffi', 'sherpa-onnx-node', '@napi-rs/system-ocr', 'onnxruntime-node']
       }
     }
   },

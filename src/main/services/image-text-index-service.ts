@@ -30,6 +30,8 @@ import {
   resolveImageTextOcrConcurrency,
   type ImageMessageCountProbe,
   type ImageMessageWatermark,
+  type ImageOcrArtifact,
+  type ImageOcrBinding,
   type ImageOcrPersistedState,
   type ImageOcrProvenance,
   type ImageTextBackfillSegment,
@@ -46,6 +48,7 @@ import {
   type ImageTextIndexStorageStats,
   type ImageTextTierCoverage
 } from '../../shared/image-text-index'
+import type { ResolvedImageTextPipeline } from '../../shared/image-text-ocr-pipeline'
 import {
   detectSystemOcrImageFormat,
   resolveSystemOcrEngine,
@@ -62,8 +65,10 @@ import {
   ImageTextIndexStore,
   getImageTextIndexDatabasePath,
   removeImageTextIndexDatabase,
-  type ConversationImageOcrEntry
+  type ConversationImageOcrEntry,
+  type ImageOcrCommitRecord
 } from './image-text-index-store'
+import type { ImagePrepareCoreResult } from './image-text-prepare-core'
 
 /** 图片消息的数据 URL 前缀。 */
 const MIME_BY_FORMAT: Record<string, string> = {
@@ -126,8 +131,32 @@ export interface ImageTextIndexServiceDeps {
     text: string
     language: string | null
     errorCode?: string
+    provenance?: ImageOcrProvenance
   }>
   capability?: () => Promise<SystemOcrCapability>
+  /**
+   * 生产环境的吞吐配置。提供之后走解密线程池 + 批量落库。
+   * 测试不提供时保持原来的有界流水线，避免改动暂停 / 进度契约。
+   */
+  readFastPipelineConfig?: () => ResolvedImageTextPipeline
+  /** GPU 不可用时的就绪判断。不提供则只看系统 OCR capability。 */
+  ocrReady?: () => Promise<{ available: boolean; message?: string }>
+  /** 每张图准备前读取。返回 null 表示沿用本遍 capability 指纹。 */
+  currentProvenance?: () => ImageOcrProvenance | null
+  /** 设置页 / 索引进度上的回退提示。 */
+  engineNotice?: () => string | undefined
+  /**
+   * 在 worker 线程里做定位 + 解密。失败或找不到文件时，服务会退回
+   * `decryptService` 的同步实现（硬链接等冷路径）。
+   */
+  prepareOffThread?: (request: {
+    md5?: string
+    datName?: string
+    accountDir: string
+    sessionMd5: string
+    createTime?: number
+    preferThumbnail?: boolean
+  }) => Promise<ImagePrepareCoreResult>
   /**
    * OCR 并发度。不传则用 `DEFAULT_IMAGE_TEXT_OCR_CONCURRENCY`，
    * 并由 `resolveImageTextOcrConcurrency` 收敛到合法区间。
@@ -247,6 +276,8 @@ interface OcrOutcome {
   state: ImageOcrPersistedState
   text: string
   errorCode?: string
+  /** 实际跑起来的引擎。和准备阶段假设的指纹不一致时，落库以这里为准。 */
+  provenance?: ImageOcrProvenance
 }
 
 /**
@@ -284,6 +315,8 @@ interface SettleInput {
   errorCode?: string
   /** 是否需要把 artifact 落库（短路成终态、命中已有 artifact 时都不需要）。 */
   writeArtifact: boolean
+  /** 识别返回的实际指纹。缺省时用准备阶段的 `provenance`。 */
+  outcomeProvenance?: ImageOcrProvenance
 }
 
 /** 图片消息判定：与 chat-service 的 `contentData.type === 'image'` 对齐。 */
@@ -380,6 +413,14 @@ export class ImageTextIndexService {
   private lastProfileLoggedAtWallClock = 0
   /** 当前生效的 OCR 并发度。 */
   private activeOcrConcurrency = DEFAULT_IMAGE_TEXT_OCR_CONCURRENCY
+  /** 生产快路径。测试不打开它。 */
+  private fastPipeline = false
+  private fastPrepareConcurrency = 1
+  private fastPersistBatchSize = 1
+  private fastReadBatchSize = IMAGE_TEXT_INDEX_BATCH_SIZE
+  private fastYield = true
+  /** 还没进事务的结算。体积不超过 `fastPersistBatchSize`。 */
+  private persistBuffer: SettleInput[] = []
   /**
    * 当前会话是否产生了会改变 Knowledge 可搜索内容的变化（见 `settle()` 里的判定）。
    *
@@ -456,6 +497,11 @@ export class ImageTextIndexService {
    * **这是账号身份缓存的唯一失效信号**，新增切换路径必须调用它。
    */
   resetAccount(): void {
+    try {
+      this.flushPersistBuffer()
+    } catch {
+      // 换账号时尽量把已算完的结果留下；写失败也不能卡住切换。
+    }
     this.conversationOcrCache.clear()
     this.store?.close()
     this.store = null
@@ -498,6 +544,7 @@ export class ImageTextIndexService {
     this.lastProfileLoggedAt = 0
     this.lastProfileLoggedAtWallClock = this.now()
     this.knowledgeIndexSkippedConversations = 0
+    this.persistBuffer = []
   }
 
   /**
@@ -698,6 +745,7 @@ export class ImageTextIndexService {
       paused: this.runState === 'paused',
       ...this.rateSnapshot(coverage.processed, total),
       ...(this.lastError ? { lastError: this.lastError } : {}),
+      ...(this.deps.engineNotice?.() ? { engineNotice: this.deps.engineNotice() } : {}),
       // 阶段提示只在"真的在做这件事"时给：运行/暂停时报当前分段；整体完成时报完成。
       // 其余情况（idle / cancelled 且未完成）不给 —— 宁可不说，也不给一句过期的阶段。
       ...(this.running || this.runState === 'paused'
@@ -1011,30 +1059,9 @@ export class ImageTextIndexService {
       return { kind: 'short-circuit', state: 'decrypt_failed', text: '', imageIdentity: null }
     }
 
-    const imageIdentity = `sha256:${sha256Short(bytes)}`
-    const format = detectSystemOcrImageFormat(bytes)
-    // 解密"没抛错"但产出不是图片 → 解码失败，不是 OCR 失败。
-    if (!format) {
-      return { kind: 'short-circuit', state: 'decode_failed', text: '', imageIdentity }
-    }
-
-    const store = this.ensureStore()
-    const artifactKey = buildImageOcrArtifactKey({ imageIdentity, provenance })
-
-    // 同一张图（可能被转发到多个会话）已经算过 → 直接复用，绝不重复 OCR。
-    const cached = store?.getArtifact(artifactKey) ?? null
-    if (cached && isTerminalImageOcrState(cached.state)) {
-      return { kind: 'short-circuit', state: cached.state, text: cached.text, imageIdentity }
-    }
-
-    // normalize：构造交给引擎的输入。macOS 的引擎直接吃原始字节，但现有 recognize
-    // 契约收的是 data URL，所以这里仍要 base64 编一次 —— 它有成本，单独计时。
-    const normalizeStartedAt = this.now()
-    const mime = MIME_BY_FORMAT[format] ?? 'image/png'
-    const dataUrl = `data:${mime};base64,${bytes.toString('base64')}`
-    this.stageStats.normalize.record(this.now() - normalizeStartedAt)
-
-    return { kind: 'ocr', imageIdentity, artifactKey, dataUrl }
+    const finished = this.finishPrepared(bytes, conversationId, provenance)
+    if (finished) return finished
+    return { kind: 'short-circuit', state: 'decode_failed', text: '', imageIdentity: null }
   }
 
   /** 真正的 OCR 调用（异步，跑在 libuv worker pool 上）。只归类结果，不碰数据库。 */
@@ -1042,16 +1069,23 @@ export class ImageTextIndexService {
     try {
       const result = await (this.deps.recognize?.(dataUrl) ??
         Promise.resolve({ success: false, text: '', language: null, errorCode: 'OCR_FAILED' }))
-      if (result.success && result.text.trim()) return { state: 'indexed', text: result.text }
+      const provenance = 'provenance' in result ? result.provenance : undefined
+      const withProvenance = (outcome: OcrOutcome): OcrOutcome =>
+        provenance ? { ...outcome, provenance } : outcome
+      if (result.success && result.text.trim())
+        return withProvenance({ state: 'indexed', text: result.text })
       // 表情包 / 风景 / 头像 —— 没有文字是**正常终态**，不重试。
       if (result.success || result.errorCode === 'OCR_EMPTY_RESULT') {
-        return { state: 'empty', text: '' }
+        return withProvenance({ state: 'empty', text: '' })
       }
-      return {
+      if (result.errorCode === 'IMAGE_DECODE_FAILED' || result.errorCode === 'UNSUPPORTED_IMAGE') {
+        return withProvenance({ state: 'decode_failed', text: '', errorCode: result.errorCode })
+      }
+      return withProvenance({
         state: 'ocr_failed',
         text: '',
         ...(result.errorCode ? { errorCode: result.errorCode } : {})
-      }
+      })
     } catch {
       return { state: 'ocr_failed', text: '' }
     }
@@ -1091,30 +1125,41 @@ export class ImageTextIndexService {
    * **单 writer**：只在这里写库，且只在图片确实进入终态之后调用 ——
    * 所以 `processed` 永远等于"真正有终态结果的图片数"，绝不会把"已派发"算进去。
    */
-  private settle(input: SettleInput): void {
-    const store = this.ensureStore()
-    const startedAt = this.now()
+  private identityOf(input: SettleInput): { provenance: ImageOcrProvenance; artifactKey: string } {
+    const provenance = input.outcomeProvenance ?? input.provenance
+    const artifactKey =
+      input.outcomeProvenance && input.imageIdentity
+        ? buildImageOcrArtifactKey({ imageIdentity: input.imageIdentity, provenance })
+        : (input.artifactKey ??
+          buildImageOcrArtifactKey({
+            imageIdentity: input.imageIdentity ?? 'unavailable',
+            provenance
+          }))
+    return { provenance, artifactKey }
+  }
+
+  private toCommitRecord(input: SettleInput): ImageOcrCommitRecord {
     const timestamp = this.now()
-
-    if (input.writeArtifact && store && input.imageIdentity && input.artifactKey) {
-      store.putArtifact({
-        accountId: this.storeAccountId,
-        artifactKey: input.artifactKey,
-        imageIdentity: input.imageIdentity,
-        state: input.state,
-        text: input.text,
-        charCount: input.text.length,
-        engine: input.provenance.engine,
-        platform: input.provenance.platform,
-        runtimeVersion: input.provenance.runtimeVersion,
-        language: input.provenance.language,
-        ...(input.errorCode ? { errorCode: input.errorCode } : {}),
-        createdAt: timestamp,
-        updatedAt: timestamp
-      })
-    }
-
-    store?.putBinding({
+    const { provenance, artifactKey } = this.identityOf(input)
+    const artifact: ImageOcrArtifact | null =
+      input.writeArtifact && input.imageIdentity
+        ? {
+            accountId: this.storeAccountId,
+            artifactKey,
+            imageIdentity: input.imageIdentity,
+            state: input.state,
+            text: input.text,
+            charCount: input.text.length,
+            engine: provenance.engine,
+            platform: provenance.platform,
+            runtimeVersion: provenance.runtimeVersion,
+            language: provenance.language,
+            ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+            createdAt: timestamp,
+            updatedAt: timestamp
+          }
+        : null
+    const binding: ImageOcrBinding = {
       accountId: this.storeAccountId,
       conversationId: input.conversationId,
       messageId: input.messageId,
@@ -1128,17 +1173,87 @@ export class ImageTextIndexService {
           ? { senderName: input.message.name }
           : {}),
       imageIdentity: input.imageIdentity ?? '',
-      artifactKey:
-        input.artifactKey ??
-        buildImageOcrArtifactKey({
-          imageIdentity: input.imageIdentity ?? 'unavailable',
-          provenance: input.provenance
-        }),
+      artifactKey,
       state: input.state,
       updatedAt: timestamp
-    })
-    this.stageStats.persist.record(this.now() - startedAt)
+    }
+    return { artifact, binding }
+  }
 
+  /** 把缓冲里的结果连同 checkpoint 一次性提交。缓冲为空时也可以只写 checkpoint。 */
+  private persistScanState(
+    store: ImageTextIndexStore,
+    scan: {
+      conversationId: string
+      state: 'done' | 'partial'
+      imageTotal: number
+      imageProcessed: number
+      maxLocalId: number
+    }
+  ): void {
+    if (!this.fastPipeline) {
+      store.writeScanState(scan)
+      return
+    }
+    const pending = this.persistBuffer.splice(0, this.persistBuffer.length)
+    this.writeCommit(store, pending, scan)
+  }
+
+  private flushPersistBuffer(): void {
+    if (!this.fastPipeline || !this.persistBuffer.length) return
+    const store = this.ensureStore()
+    if (!store) {
+      this.persistBuffer.length = 0
+      return
+    }
+    const pending = this.persistBuffer.splice(0, this.persistBuffer.length)
+    this.writeCommit(store, pending)
+  }
+
+  private writeCommit(
+    store: ImageTextIndexStore,
+    pending: SettleInput[],
+    scan?: {
+      conversationId: string
+      state: 'done' | 'partial'
+      imageTotal: number
+      imageProcessed: number
+      maxLocalId: number
+    }
+  ): void {
+    const startedAt = this.now()
+    store.commitDerivedBatch({
+      records: pending.map((input) => this.toCommitRecord(input)),
+      ...(scan ? { scan } : {})
+    })
+    const elapsed = Math.max(0, this.now() - startedAt)
+    const share = pending.length > 0 ? elapsed / pending.length : elapsed
+    for (const input of pending) {
+      this.stageStats.persist.record(share)
+      this.noteSettled(input)
+    }
+  }
+
+  private bufferSettle(input: SettleInput): void {
+    if (!this.fastPipeline) {
+      this.settle(input)
+      return
+    }
+    this.persistBuffer.push(input)
+    if (this.persistBuffer.length >= this.fastPersistBatchSize) this.flushPersistBuffer()
+  }
+
+  private settle(input: SettleInput): void {
+    const store = this.ensureStore()
+    const startedAt = this.now()
+    const record = this.toCommitRecord(input)
+    if (record.artifact) store?.putArtifact(record.artifact)
+    store?.putBinding(record.binding)
+    this.stageStats.persist.record(this.now() - startedAt)
+    this.noteSettled(input)
+  }
+
+  private noteSettled(input: SettleInput): void {
     this.conversationOcrCache.delete(input.conversationId)
     this.counters.processedThisPass += 1
     this.settledThisPass += 1
@@ -1182,6 +1297,16 @@ export class ImageTextIndexService {
     canDispatch: () => boolean,
     consumeBudget: () => void
   ): Promise<{ processed: number; interrupted: boolean }> {
+    if (this.fastPipeline) {
+      return this.processBatchFast(
+        batch,
+        conversationId,
+        provenance,
+        ocrByMessage,
+        canDispatch,
+        consumeBudget
+      )
+    }
     const concurrency = this.activeOcrConcurrency
     const inFlight: Array<Promise<SettleInput>> = []
     let cursor = 0
@@ -1235,6 +1360,7 @@ export class ImageTextIndexService {
               imageIdentity: prepared.imageIdentity,
               artifactKey: prepared.artifactKey,
               ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+              ...(outcome.provenance ? { outcomeProvenance: outcome.provenance } : {}),
               writeArtifact: true
             })
           )
@@ -1260,6 +1386,205 @@ export class ImageTextIndexService {
     }
   }
 
+  /**
+   * 快路径：解密在线程池里和 OCR 重叠，结果按批事务落库。
+   * 暂停 / 取消仍然不再领取新的 OCR，已经在跑的识别会收尾并提交。
+   */
+  private async processBatchFast(
+    batch: chat.FormattedMessage[],
+    conversationId: string,
+    provenance: ImageOcrProvenance,
+    ocrByMessage: Map<string, ConversationImageOcrEntry>,
+    canDispatch: () => boolean,
+    consumeBudget: () => void
+  ): Promise<{ processed: number; interrupted: boolean }> {
+    const ocrLimit = this.activeOcrConcurrency
+    const prepareLimit = this.fastPrepareConcurrency
+    let cursor = 0
+    let processed = 0
+    const prepareSlots: Array<Promise<void>> = []
+    const ocrSlots: Array<Promise<void>> = []
+    const ocrQueue: Array<{
+      message: chat.FormattedMessage
+      messageId: string
+      prepared: Extract<PreparedImage, { kind: 'ocr' }>
+      provenance: ImageOcrProvenance
+    }> = []
+
+    const remove = (list: Array<Promise<void>>, task: Promise<void>): void => {
+      const index = list.indexOf(task)
+      if (index >= 0) list.splice(index, 1)
+    }
+
+    const launchOcr = (): void => {
+      while (
+        !this.cancelRequested &&
+        !this.pauseRequested &&
+        ocrSlots.length < ocrLimit &&
+        ocrQueue.length > 0
+      ) {
+        const item = ocrQueue.shift()
+        if (!item) break
+        let tracked: Promise<void> = Promise.resolve()
+        tracked = this.runOcr(item.prepared.artifactKey, item.prepared.dataUrl)
+          .then((outcome) => {
+            this.bufferSettle({
+              message: item.message,
+              conversationId,
+              provenance: item.provenance,
+              messageId: item.messageId,
+              state: outcome.state,
+              text: outcome.text,
+              imageIdentity: item.prepared.imageIdentity,
+              artifactKey: item.prepared.artifactKey,
+              ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+              ...(outcome.provenance ? { outcomeProvenance: outcome.provenance } : {}),
+              writeArtifact: true
+            })
+            processed += 1
+          })
+          .finally(() => remove(ocrSlots, tracked))
+        ocrSlots.push(tracked)
+      }
+    }
+
+    const launchPrepare = (): void => {
+      while (
+        !this.cancelRequested &&
+        !this.pauseRequested &&
+        prepareSlots.length < prepareLimit &&
+        cursor < batch.length
+      ) {
+        const message = batch[cursor]
+        const messageId = sourceMessageId(message)
+        const known = ocrByMessage.get(messageId)
+        if (known && isTerminalImageOcrState(known.state)) {
+          cursor += 1
+          processed += 1
+          continue
+        }
+        if (!canDispatch()) return
+        cursor += 1
+        consumeBudget()
+        const imageProvenance = this.deps.currentProvenance?.() ?? provenance
+        let tracked: Promise<void> = Promise.resolve()
+        tracked = this.prepareForPipeline(message, conversationId, imageProvenance)
+          .then((prepared) => {
+            if (this.cancelRequested || this.pauseRequested) return
+            if (prepared.kind === 'short-circuit') {
+              this.bufferSettle({
+                message,
+                conversationId,
+                provenance: imageProvenance,
+                messageId,
+                state: prepared.state,
+                text: prepared.text,
+                imageIdentity: prepared.imageIdentity,
+                artifactKey: null,
+                writeArtifact: false
+              })
+              processed += 1
+              return
+            }
+            ocrQueue.push({ message, messageId, prepared, provenance: imageProvenance })
+            launchOcr()
+          })
+          .catch(() => {
+            this.bufferSettle({
+              message,
+              conversationId,
+              provenance: imageProvenance,
+              messageId,
+              state: 'decrypt_failed',
+              text: '',
+              imageIdentity: null,
+              artifactKey: null,
+              writeArtifact: false
+            })
+            processed += 1
+          })
+          .finally(() => remove(prepareSlots, tracked))
+        prepareSlots.push(tracked)
+      }
+    }
+
+    while (
+      cursor < batch.length ||
+      prepareSlots.length > 0 ||
+      ocrSlots.length > 0 ||
+      ocrQueue.length > 0
+    ) {
+      if (!this.cancelRequested && !this.pauseRequested) {
+        launchPrepare()
+        launchOcr()
+      }
+      if (prepareSlots.length === 0 && ocrSlots.length === 0) break
+      await Promise.race([...prepareSlots, ...ocrSlots])
+    }
+
+    return {
+      processed,
+      interrupted: this.cancelRequested || this.pauseRequested
+    }
+  }
+
+  private async prepareForPipeline(
+    message: chat.FormattedMessage,
+    conversationId: string,
+    provenance: ImageOcrProvenance
+  ): Promise<PreparedImage> {
+    const offThread = this.deps.prepareOffThread
+    const imageContent =
+      message.contentData?.type === 'image'
+        ? (message.contentData as { md5?: string; datName?: string })
+        : undefined
+    const accountDir = this.deps.resolveAccountRoot?.() || ''
+    if (offThread && accountDir && (imageContent?.md5 || imageContent?.datName)) {
+      try {
+        const prepared = await offThread({
+          md5: imageContent?.md5,
+          datName: imageContent?.datName,
+          accountDir,
+          sessionMd5: conversationId,
+          createTime: message.createTime,
+          preferThumbnail: true
+        })
+        if (prepared.bytes && prepared.bytes.length > 0) {
+          this.stageStats.locate.record(prepared.locateMs)
+          this.stageStats.decrypt.record(prepared.decryptMs)
+          const finished = this.finishPrepared(prepared.bytes, conversationId, provenance)
+          if (finished) return finished
+        }
+      } catch {
+        // 线程崩了就退回主进程解密，这一张不能把整批拖死。
+      }
+    }
+    return this.prepareImage(message, conversationId, provenance)
+  }
+
+  /** 解密字节已经在手时，走和同步 prepare 相同的身份 / 缓存 / data URL 收尾。 */
+  private finishPrepared(
+    bytes: Buffer,
+    conversationId: string,
+    provenance: ImageOcrProvenance
+  ): PreparedImage | null {
+    const imageIdentity = `sha256:${sha256Short(bytes)}`
+    const format = detectSystemOcrImageFormat(bytes)
+    if (!format) return { kind: 'short-circuit', state: 'decode_failed', text: '', imageIdentity }
+    const store = this.ensureStore()
+    const artifactKey = buildImageOcrArtifactKey({ imageIdentity, provenance })
+    const cached = store?.getArtifact(artifactKey) ?? null
+    if (cached && isTerminalImageOcrState(cached.state)) {
+      return { kind: 'short-circuit', state: cached.state, text: cached.text, imageIdentity }
+    }
+    const normalizeStartedAt = this.now()
+    const mime = MIME_BY_FORMAT[format] ?? 'image/png'
+    const dataUrl = `data:${mime};base64,${bytes.toString('base64')}`
+    this.stageStats.normalize.record(this.now() - normalizeStartedAt)
+    void conversationId
+    return { kind: 'ocr', imageIdentity, artifactKey, dataUrl }
+  }
+
   // --------------------------------------------------------------------- pass
 
   /**
@@ -1279,8 +1604,28 @@ export class ImageTextIndexService {
     this.pauseRequested = false
     this.lastError = undefined
     this.startedAt = this.now()
+    try {
+      this.flushPersistBuffer()
+    } catch {
+      // 上一遍没收干净的尾巴尽量落盘；失败也不阻止新的一遍。
+    }
     // 并发度在 pass 开始时定一次：pass 中途变化会让耗时画像不可解释。
-    this.activeOcrConcurrency = resolveImageTextOcrConcurrency(this.deps.ocrConcurrency)
+    const fast = this.deps.readFastPipelineConfig?.() ?? null
+    this.fastPipeline = fast !== null
+    if (fast) {
+      this.activeOcrConcurrency = fast.ocrConcurrency
+      this.fastPrepareConcurrency = fast.prepareConcurrency
+      this.fastPersistBatchSize = fast.persistBatchSize
+      this.fastReadBatchSize = fast.readBatchSize
+      this.fastYield = fast.yieldBetweenBatches
+    } else {
+      this.activeOcrConcurrency = resolveImageTextOcrConcurrency(this.deps.ocrConcurrency)
+      this.fastPrepareConcurrency = 1
+      this.fastPersistBatchSize = 1
+      this.fastReadBatchSize = IMAGE_TEXT_INDEX_BATCH_SIZE
+      this.fastYield = true
+    }
+    this.persistBuffer = []
     this.resetStageStats()
     // 新的一遍从零开始计时：上一次的采样会把速度算歪。
     this.resetProgressNotifications()
@@ -1291,6 +1636,12 @@ export class ImageTextIndexService {
         this.runState = 'error'
       })
       .finally(() => {
+        try {
+          this.flushPersistBuffer()
+        } catch (error) {
+          this.lastError = error instanceof Error ? error.message : String(error)
+          this.runState = 'error'
+        }
         this.running = false
         this.passPromise = null
         void this.emit()
@@ -1329,7 +1680,14 @@ export class ImageTextIndexService {
     // `startupMs` 的参照点。逐会话逻辑被抽成独立方法之后，它必须放在实例上。
     this.passStartedAt = preLoopStartedAt
     const capability = (await this.deps.capability?.()) ?? null
-    if (capability && !capability.available) {
+    if (this.deps.ocrReady) {
+      const ready = await this.deps.ocrReady()
+      if (!ready.available) {
+        this.lastError = ready.message || '当前系统不支持本地图片文字识别'
+        this.runState = 'error'
+        return
+      }
+    } else if (capability && !capability.available) {
       this.lastError = '当前系统不支持本地图片文字识别'
       this.runState = 'error'
       return
@@ -1679,10 +2037,8 @@ export class ImageTextIndexService {
        * `count === null` 是**统计失败，不是 0 张** —— 必须跳过并且不写任何完成标记，
        * 否则这段会被当成"已覆盖"，把数不出来谎报成没有图片。
        */
-      const probe = await (this.deps.countConversationImages?.(
-        conversationId,
-        windowArg
-      ) ?? Promise.resolve<ImageMessageCountProbe>({ count: null, typeColumn: null }))
+      const probe = await (this.deps.countConversationImages?.(conversationId, windowArg) ??
+        Promise.resolve<ImageMessageCountProbe>({ count: null, typeColumn: null }))
       if (probe.count === null) {
         this.preLoop.conversationSetupMs += this.now() - setupStartedAt
         continue
@@ -1701,7 +2057,7 @@ export class ImageTextIndexService {
         continue
       }
 
-      await this.deps.interactiveIdle?.()
+      if (!this.fastPipeline || this.fastYield) await this.deps.interactiveIdle?.()
 
       /**
        * 读这个会话的图片消息。
@@ -1733,7 +2089,10 @@ export class ImageTextIndexService {
             if (effectiveWindow.sinceMs !== undefined && createTimeMs < effectiveWindow.sinceMs) {
               return false
             }
-            if (effectiveWindow.beforeMs !== undefined && createTimeMs >= effectiveWindow.beforeMs) {
+            if (
+              effectiveWindow.beforeMs !== undefined &&
+              createTimeMs >= effectiveWindow.beforeMs
+            ) {
               return false
             }
             return true
@@ -1771,7 +2130,8 @@ export class ImageTextIndexService {
       // 每个会话单独判定"是否需要让 Knowledge 重建"，不跨会话累积。
       this.knowledgeDirty = false
 
-      for (let index = 0; index < imageMessages.length; index += IMAGE_TEXT_INDEX_BATCH_SIZE) {
+      const readBatchSize = this.fastPipeline ? this.fastReadBatchSize : IMAGE_TEXT_INDEX_BATCH_SIZE
+      for (let index = 0; index < imageMessages.length; index += readBatchSize) {
         if (!input.preLoopState.captured) {
           input.preLoopState.captured = true
           this.preLoop.startupMs = this.now() - this.passStartedAt
@@ -1781,7 +2141,7 @@ export class ImageTextIndexService {
           break
         }
         const batchStartedAt = this.now()
-        const batch = imageMessages.slice(index, index + IMAGE_TEXT_INDEX_BATCH_SIZE)
+        const batch = imageMessages.slice(index, index + readBatchSize)
         const batchResult = await this.processBatch(
           batch,
           conversationId,
@@ -1799,8 +2159,10 @@ export class ImageTextIndexService {
           break
         }
 
-        // 批次之间让出 event loop：交互查询 / UI 永远优先于后台历史 OCR。
-        await new Promise<void>((resolve) => setImmediate(resolve))
+        // 全力模式不再在每批之间让出。均衡模式和旧路径仍让一次，避免 UI 饿死。
+        if (!this.fastPipeline || this.fastYield) {
+          await new Promise<void>((resolve) => setImmediate(resolve))
+        }
         await this.emit()
         this.batchLoopMs += this.now() - batchStartedAt
         this.maybeLogStageProfile()
@@ -1813,7 +2175,7 @@ export class ImageTextIndexService {
        * 或者让用户以为这个会话已经处理完。预算耗尽只能记 `partial`。
        */
       if (interrupted || budget.remaining <= 0) {
-        store.writeScanState({
+        this.persistScanState(store, {
           conversationId,
           state: 'partial',
           /**
@@ -1904,8 +2266,9 @@ export class ImageTextIndexService {
     const state: 'done' | 'partial' =
       marksConversationDone && previous?.state !== 'partial' ? 'done' : 'partial'
     const imageTotal = watermark?.count ?? previous?.imageTotal ?? 0
-    const maxLocalId = watermark?.maxLocalId ?? input.observedMaxLocalId ?? previous?.maxLocalId ?? 0
-    store.writeScanState({
+    const maxLocalId =
+      watermark?.maxLocalId ?? input.observedMaxLocalId ?? previous?.maxLocalId ?? 0
+    this.persistScanState(store, {
       conversationId,
       state,
       imageTotal,
@@ -1946,7 +2309,6 @@ export class ImageTextIndexService {
     const coveredToMs = complete ? Math.max(state.coveredToMs ?? 0, anchorMs) : state.coveredToMs
     return { tiers, coveredToMs }
   }
-
 
   // --------------------------------------------------------------- 控制接口
 

@@ -118,6 +118,7 @@ export function ImageTextIndexSummary({
         <div className="local-index-card-title">
           <h3>图片文字索引</h3>
           <p>本地 OCR 提取图片文字，让截图、报价图也能被搜到</p>
+          {progress?.engineNotice ? <p>{progress.engineNotice}</p> : null}
         </div>
         <IndexStatusBadge label={stateLabel} tone={tone} />
       </header>

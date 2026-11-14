@@ -565,6 +565,14 @@ export class ImageDecryptService {
     return this.cachedAccountDir
   }
 
+  /** 给解密线程池用的密钥材料。不包含路径或账号。 */
+  workerMaterial(): { aesKey: string; xorKey: number } {
+    return {
+      aesKey: this.aesKey,
+      xorKey: Number.isFinite(this.xorKey) ? this.xorKey : 0
+    }
+  }
+
   /**
    * 根据 md5 查找图片文件
    */

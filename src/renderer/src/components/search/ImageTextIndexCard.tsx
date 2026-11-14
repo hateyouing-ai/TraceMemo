@@ -205,6 +205,9 @@ export function ImageTextIndexCard({ dbReady, onNotice }: ImageTextIndexCardProp
           让「问问微信」也能搜索微信图片中的文字（截图、报价图、公告截图等）。
           识别在本机进行，原始图片无需发送给 AI Provider。
         </p>
+        {progress?.engineNotice ? (
+          <p className="ai-search-knowledge-description">{progress.engineNotice}</p>
+        ) : null}
 
         {/* 未建立：先告诉用户这个账号大概有多少图片，再让他决定要不要跑。 */}
         {!established && !running && (

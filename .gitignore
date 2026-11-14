@@ -11,6 +11,9 @@ coverage/
 playwright-report/
 test-results/
 resources/runtime/darwin-arm64
+resources/ocr/rapidocr/*.onnx
+resources/ocr/rapidocr/*.txt
+resources/ocr/rapidocr/*.partial
 .native-runtime-source
 .omc
 .codex/

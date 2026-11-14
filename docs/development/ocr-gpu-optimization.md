@@ -1,0 +1,113 @@
+# 图片文字索引：GPU OCR 与吞吐优化
+
+这份改动针对的是**这一台电脑**，不是一套放之四海皆准的默认值：
+
+- Windows 11 x64（build 26100）
+- CPU：Intel Core i5-14600K（6 个性能核 + 8 个能效核，20 个逻辑线程）
+- GPU：NVIDIA GeForce RTX 4060 Ti，驱动 32.0.15.6094
+
+用户要求索引 18.6 万张微信图片时把这台机器用满，索引期间电脑较忙是可以接受的。下面的「全力模式」就是按这个前提定的。
+
+## 改了什么
+
+原来的流水线是：主线程同步定位并解密一张，然后最多 2 路（硬上限 4）系统 OCR，每张立刻写一次 SQLite，每 12 张让出一次事件循环。Windows 走 `Windows.Media.Ocr`，纯 CPU。
+
+现在生产环境走一条快路径（测试里不打开它，原来的暂停 / 继续 / 取消和进度语义保持不变）：
+
+1. **GPU OCR**。新增 RapidOCR PP-OCRv4（中文检测 + 识别 ONNX）后端，跑在独立子进程里。Windows 上执行提供程序优先 **DirectML**，失败再考虑 CPU。系统 OCR（`@napi-rs/system-ocr`）保留，GPU 模型、运行时或进程起不来时自动改回系统 OCR，设置页和索引进度会写出原因。
+2. **解密离开主线程**。定位 `.dat` 和解密放进 worker_threads 池，和 OCR 重叠。线程崩了会拉起新线程，这一张失败或退回主进程里的原解密实现（硬链接等冷路径），不会把 Electron 主进程一起带走。
+3. **并发可配置**。设置 → 本地图片文字识别里可以选择引擎、性能预设、识别并发、解密并发。填 0 表示按机器自动算。
+4. **派生库按批提交**。artifact、binding 和会话 checkpoint 放在同一个 SQLite 事务里。崩溃、强关或断电最多重做还没提交的那一小批（全力模式 32 张），已经提交的不会重识别，也不会因为 checkpoint 超前把没写上的结果跳过。
+
+单张坏图或 GPU 进程崩溃：调度器重启进程并把这一张再试一次；第二次仍失败就记成 `ocr_failed`，其它图片继续。`ocr_failed` 仍是原来的终态，不会在下次启动时把已经成功的结果重算一遍。
+
+## 为什么是 DirectML，不是 CUDA
+
+官方 `onnxruntime-node` 的 Windows 预编译包带 DirectML，不带 CUDA Execution Provider。RTX 4060 Ti 配驱动 32.0.15.6094 可以直接用 DirectML，不必再装一套 CUDA Toolkit / cuDNN，版本也不用和驱动钉死。
+
+CUDA 仍然留了口子：自行换上带 CUDA 的 onnxruntime 后设置 `TRACEMEMO_OCR_EP=cuda`。没有验证过这台机器上的 CUDA 包，默认不要走这条。
+
+PP-OCRv4 mobile 对中文截图、报价图是 RapidOCR 的常用组合，模型只有几十 MB，4060 Ti 上常驻 2 个会话不会把显存打满。检测长边限制 960，和 PaddleOCR 的默认一致：再放大主要是多耗 GPU，而不是这批聊天截图的主要误差来源。
+
+## 针对这台电脑的参数
+
+检测到 CPU 型号包含 `i5-14600K` 且平台是 Windows 时，预设「自动」等于「全力」。其它机器的「自动」是均衡模式。也可以在设置里手动改。
+
+| 参数 | 全力（本机） | 均衡 | 理由 |
+| --- | --- | --- | --- |
+| 解密并发 | 12 | `min(6, 线程数/2)`，至少 2 | AES 和读盘吃 CPU。20 个逻辑线程里留大约 8 个给界面、DirectML 驱动和系统。 |
+| 识别队列 | GPU 为 4；只有系统 OCR 时为 8 | GPU 为 2；系统 OCR 不超过 4 | GPU 路径的数字是流水线深度，用来喂饱**一块** GPU，不是开 20 个会话去抢。系统 OCR 仍走 WinRT，8 路在 14600K 的性能核上已经很满。 |
+| GPU 进程 | 2 | 1 | 两个 DirectML 进程可以让一个在做预处理时另一个在跑推理。再多只会抢同一块 4060 Ti。 |
+| 读批 | 64 | 24 | 减少 JS 循环开销。暂停时最多多做完当前已领取的一小批。 |
+| 写入批 | 32 | 16 | 一次事务提交。崩溃重做的上限就是这一批，而不是几千张。 |
+| 批间让出 | 关 | 开 | 全力模式接受电脑忙。进度通知仍然按原来的 5 秒节流，不把 UI 刷爆。 |
+| 识别行批 | 8 | 4 | 同一张图里的文本行打成一批送给识别模型。 |
+| 识别最大宽度 | 640 | 320 | 报价图一行往往比较长，全力模式少压一点宽度。 |
+
+这些数字在 `src/shared/image-text-ocr-pipeline.ts` 的 `resolveImageTextPipeline`。环境变量 `TRACEMEMO_OCR_CONCURRENCY` 仍可覆盖识别队列深度，用来做对照，不会把快路径关掉。
+
+Linux 虚拟机没有这块 GPU。没有 DirectML、模型没下好、或者进程起不来时，自动回退系统 OCR。虚拟机上的系统 OCR 本身也不可用，所以真机速度必须在 Windows 上量。开发时若只想在 CPU 上把 RapidOCR 跑通，可以加 `TRACEMEMO_OCR_ALLOW_CPU=1`，这不是本机的默认。
+
+## 模型与运行时怎么来
+
+模型是 RapidAI/RapidOCR **v3.4.0** 的 PP-OCRv4 中文 ONNX，清单和 SHA256 在 `src/shared/ocr-gpu-models.ts`：
+
+- `ch_PP-OCRv4_det_infer.onnx`
+- `ch_PP-OCRv4_rec_infer.onnx`
+- `ch_ppocr_mobile_v2.0_cls_infer.onnx`（方向分类，默认索引路径不跑它，文件仍会备好）
+- `ppocr_keys_v1.txt`（必须和上面的识别模型成对，不能换成 v3 或 v5 的字典）
+
+两种获取方式，和现有的 `scripts/prepare-*-runtime` 一样，都是构建前准备；应用侧也会在第一次启用 GPU 时再试一次：
+
+```bash
+pnpm install
+pnpm prepare:ocr-gpu
+```
+
+`prepare:ocr-gpu` 把文件下到 `resources/ocr/rapidocr/`，并按 SHA256 校验检测 / 识别 / 分类模型。打包配置会把这个目录放进 Windows 安装包的 resources。若打包时目录是空的，首次索引会下载到用户数据目录下的 `ocr/rapidocr/`。
+
+也可以自己把上述四个文件放进该目录，或设置 `TRACEMEMO_OCR_MODEL_DIR`。
+
+运行时是依赖里的 `onnxruntime-node@1.21.0`（Windows 包含 DirectML）。它是原生模块，`electron.vite` 不会把它打进 asar 主包，`electron-builder.win.yml` 会把它从 asar 里解出来。
+
+## 在这台 Windows 电脑上编译、打包、打开 GPU
+
+在仓库根目录：
+
+```bash
+pnpm install
+pnpm prepare:ocr-gpu
+pnpm prepare:win-runtime
+pnpm build:win
+```
+
+安装打出来的安装包后：
+
+1. 打开 **设置 → AI 模型 → 本地图片文字识别**。
+2. 索引引擎选 **自动** 或 **GPU（RapidOCR / DirectML）**。
+3. 性能预设选 **自动** 或 **全力（针对此台电脑）**。识别并发、解密并发留 0。
+4. 页面上应能看到类似「针对此台电脑（i5-14600K + RTX 4060 Ti）的全力模式 · 解密 12 路 · 识别队列 4 · GPU 进程 2」以及「RapidOCR 正在使用 dml」。
+5. 若模型或 DirectML 不可用，同一位置会出现回退说明，索引改走系统 OCR，不会停在「建立失败」——除非系统 OCR 也不可用（例如没装中文语言包）。
+
+任务管理器里，索引进行中应能看到 TraceMemo 的 CPU 占用明显上去，GPU 引擎里 DirectML / 3D 有持续占用。这是预期，不是卡死。
+
+## 怎么验证变快了
+
+虚拟机上的单元测试覆盖的是调度、批量提交、回退和线程崩溃，**不能**当成这台 4060 Ti 的速度数字。下面的步骤要在这台 Windows 上做。
+
+1. 先用系统 OCR 跑一小段，确认基线。设置里引擎选「系统 OCR」，预设选「均衡」，只索引最近 1 天或设置里能接受的小窗口。等进度里出现速度（张/秒）后记下来。日志里的「图片文字索引性能画像」有 `locate` / `decrypt` / `ocr` / `persist` 和 `ocrConcurrency`。
+2. 改回「自动 / 全力」，确认页面写的是 DirectML 而不是回退提示。再跑同一时间窗口，或接着跑未完成的历史（已成功的图不会重算）。
+3. 对比两边的近期速度，而不是从点击开始的总平均。全量 18 万张会跑很久，总平均会被启动和会话列举拖住。
+4. 画像里如果 `ocr` 不再是大头、`locate`/`decrypt` 也不再占满主线程时间，说明重叠生效。GPU 引擎名在派生库 artifact 的 `engine` 字段里是 `rapidocr-onnx-dml`。
+5. 强制结束进程后再打开，已写入的条数还在，速度从断点继续，不会从 0 重新识别。可以把写入批理解成：最多重做 32 张，不会丢已经提交的几万张。
+
+不要把某一次日志里的张/秒写进文档当作承诺。机器上还有微信、磁盘和缩略图命中率，数字会变。
+
+## 已知风险
+
+- DirectML 在部分驱动上对动态 shape 比 CUDA 挑剔。识别模型按批失败时会自动改成逐行，速度下降但任务继续。
+- 全力模式会让 UI 和其它软件变慢。预设可以改回「均衡」。
+- 解密线程池覆盖的是微信 4 的会话目录和 V4 DAT。找不到文件时仍走原来的主进程解密（含硬链接）。这条冷路径会短暂占用主线程。
+- 换了 OCR 引擎之后，旧的系统 OCR 结果不会被当成 GPU 结果复用（指纹里有引擎名）。已经成功的系统 OCR 文本还在；新引擎只处理还没在**该引擎**下算过的图。若希望整库改用 GPU 文本，需要清理图片文字索引后重建，这会丢掉现有派生文本。
+- `onnxruntime-node` 和模型体积不小。没跑 `prepare:ocr-gpu` 又没有网络时，GPU 路径会失败并回退，索引不会假装自己在用 GPU。
+- Linux / macOS 上没有这套 DirectML。macOS 继续用系统 OCR。不要把本机的全力参数原样套到笔记本上。

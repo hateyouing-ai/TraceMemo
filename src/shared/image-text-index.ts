@@ -578,6 +578,11 @@ export interface ImageTextIndexProgress {
    * （全量图片消息），绝不允许用"某个分段处理完了"冒充整体完成。
    */
   currentPhase?: ImageTextIndexPhase
+  /**
+   * GPU 引擎回退到系统 OCR 时的说明。没有回退时不出现。
+   * 它不是失败：索引仍在跑。
+   */
+  engineNotice?: string
 }
 
 /**

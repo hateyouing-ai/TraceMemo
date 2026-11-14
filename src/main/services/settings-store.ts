@@ -3,6 +3,10 @@ import fs from 'fs-extra'
 import path from 'path'
 import os from 'os'
 import type { TextToSpeechModel } from '../../shared/text-to-speech'
+import {
+  normalizeImageTextOcrSettings,
+  type ImageTextOcrStoredSettings
+} from '../../shared/image-text-ocr-pipeline'
 
 /**
  * 把 V3 时代的 "...\\Documents\\WeChat Files" 路径重定向到
@@ -60,6 +64,16 @@ export interface AppSettings {
    * 设置页随时可以改回来。
    */
   closeAction: CloseAction
+  /**
+   * 图片文字索引的引擎和吞吐预设。
+   * `auto` 在 i5-14600K + Windows 上会套用为这台电脑准备的全力参数。
+   */
+  imageTextOcrEngine: ImageTextOcrStoredSettings['engine']
+  imageTextOcrPreset: ImageTextOcrStoredSettings['preset']
+  /** 0 = 按预设计算。 */
+  imageTextOcrConcurrency: number
+  /** 0 = 按预设计算。 */
+  imageTextPrepareConcurrency: number
   /**
    * 用户点过「忽略此版本」的更新版本号（不含 `v` 前缀）。
    *
@@ -161,7 +175,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   reportImagePostfixText: '今日日报',
   queryAgentEnabled: true,
   closeAction: 'ask',
-  skippedUpdateVersion: ''
+  skippedUpdateVersion: '',
+  imageTextOcrEngine: 'auto',
+  imageTextOcrPreset: 'auto',
+  imageTextOcrConcurrency: 0,
+  imageTextPrepareConcurrency: 0
 }
 
 const SETTINGS_FILE = path.join(
@@ -217,6 +235,16 @@ export function loadSettings(): AppSettings {
       }
       // 版本号是拿来逐字比对的：脏值会让「忽略」永远命中不了同一条记录。
       cache.skippedUpdateVersion = normalizeSkippedUpdateVersion(cache.skippedUpdateVersion)
+      const ocrSettings = normalizeImageTextOcrSettings({
+        engine: cache.imageTextOcrEngine,
+        preset: cache.imageTextOcrPreset,
+        ocrConcurrency: cache.imageTextOcrConcurrency,
+        prepareConcurrency: cache.imageTextPrepareConcurrency
+      })
+      cache.imageTextOcrEngine = ocrSettings.engine
+      cache.imageTextOcrPreset = ocrSettings.preset
+      cache.imageTextOcrConcurrency = ocrSettings.ocrConcurrency
+      cache.imageTextPrepareConcurrency = ocrSettings.prepareConcurrency
       // 防撤回已下线（设置入口已隐藏）：历史版本可能把它持久化为 true。
       // 这里强制收敛为 false 并回写磁盘，确保旧的撤回监听与撤回日志不会继续运行。
       if (cache.recallProtectionEnabled || retiredKeepProcess !== undefined) {
