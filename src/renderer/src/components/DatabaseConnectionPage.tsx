@@ -139,7 +139,8 @@ export function DatabaseConnectionPage({
   // 流程由主进程的 macKeyFlow 决定；只有旧版主进程不回传该字段时才回落到运行架构。
   const macKeyFlow = environment?.macKeyFlow
   const isArchMismatch = isMac && macKeyFlow === 'arch-mismatch'
-  const isIntelMac = isMac && (macKeyFlow ? macKeyFlow === 'intel' : environment?.architecture === 'x64')
+  const isIntelMac =
+    isMac && (macKeyFlow ? macKeyFlow === 'intel' : environment?.architecture === 'x64')
   const isAppleSiliconMac = isMac && !isIntelMac && !isArchMismatch
   const defaultPath = isMac
     ? '~/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat/'
@@ -156,7 +157,7 @@ export function DatabaseConnectionPage({
           <h1>TraceMemo（迹忆）</h1>
           <p className="database-login-tagline">让 AI 读懂你的微信</p>
           <p className="database-login-description">
-            连接成功后，你可以搜索聊天记录、生成群聊日报，并按需使用 AI 分析。
+            连接成功后，你可以搜索聊天记录，并按需使用 AI 分析。
           </p>
           <div className="database-login-promises">
             <div>
@@ -287,7 +288,9 @@ export function DatabaseConnectionPage({
                     <>
                       {isArchMismatch && (
                         <div className="database-login-arch-mismatch" role="alert">
-                          <strong>当前电脑使用 Apple 芯片，但你正在运行 Intel 版 TraceMemo。</strong>
+                          <strong>
+                            当前电脑使用 Apple 芯片，但你正在运行 Intel 版 TraceMemo。
+                          </strong>
                           <p>这个版本无法使用当前的 Apple Silicon 自动获取密钥流程。</p>
                           <p>请下载并安装 arm64 版本，然后重新启动 TraceMemo。</p>
                           <p>已保存的微信数据库密钥无需重新获取。</p>

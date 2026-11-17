@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
+import {
+  CUSTOM_EDITION_ID,
+  CUSTOM_EDITION_LABEL,
+  UPSTREAM_BASE_COMMIT,
+  UPSTREAM_BASE_VERSION,
+  UPSTREAM_REPOSITORY
+} from '../../../../../shared/custom-edition'
 import { Button, Progress } from '../../../components/ui'
 import { useAppUpdateState } from '../../app-update/useAppUpdateState'
 
-const REPOSITORY_URL = 'https://github.com/Wxw-Gu/TraceMemo'
+const REPOSITORY_URL = UPSTREAM_REPOSITORY
 const RELEASES_URL = `${REPOSITORY_URL}/releases`
 
 function formatDataSize(value?: number): string {
@@ -99,11 +106,21 @@ export function AboutPage({
               <span className="settings-card-kicker">当前版本</span>
               <strong>TraceMemo（迹忆）</strong>
               <small>v{update.currentVersion}</small>
+              <small>
+                {CUSTOM_EDITION_LABEL}（{CUSTOM_EDITION_ID}）
+              </small>
+              <small>
+                基于上游 {UPSTREAM_BASE_VERSION}（{UPSTREAM_BASE_COMMIT.slice(0, 12)}）
+              </small>
             </div>
             <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">
-              GitHub 仓库
+              上游仓库
             </a>
           </section>
+          <p className="text-sm text-muted-foreground">
+            安装标识、产品名和用户数据目录仍是
+            TraceMemo。软件更新仍指向原作者仓库；安装上游版本会覆盖这个定制。已保存的日报文件不会被这个版本删除。
+          </p>
 
           <h2 className="settings-section-heading">软件更新</h2>
           <section className={`settings-card update-card status-${update.status}`}>

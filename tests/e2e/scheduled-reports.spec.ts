@@ -7,7 +7,7 @@ import { launchTestApp } from './support/electron'
  * 「定时日报」已从「日报 → 定时日报」独立页迁到「自动化 → 规则 → 定时日报」，
  * 本文件走的是**迁移后**的真实路径：
  *
- *   日报（提示条）→「去自动化配置 →」→ 自动化 · 定时日报（规则列表）→ 新建 → 编辑器
+ *   自动化 →「管理定时日报」→ 定时日报（规则列表）→ 新建 → 编辑器
  *
  * 断言一律打在真实模型渲染出的**默认值与真实选项**上（范围 / 模板 / 成员名称 /
  * 消息类型 / 发送目标），而不是「页面上有个按钮」这种空转检查。
@@ -18,8 +18,8 @@ const FIXTURE_NOW = Date.parse('2026-08-27T08:30:00+08:00')
 
 /** 从时间线进入「自动化 → 定时日报」的规则列表。 */
 async function openScheduledReportRuleList(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '日报' }).click()
-  await page.getByRole('button', { name: '去自动化配置 →' }).click()
+  await page.getByRole('button', { name: '自动化' }).click()
+  await page.getByRole('button', { name: '管理定时日报 →' }).click()
   await expect(page.getByRole('radiogroup', { name: '切换规则类型' })).toBeVisible()
 }
 

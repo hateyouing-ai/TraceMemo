@@ -990,6 +990,7 @@ function createWindow(): void {
     height: initialHeight,
     minWidth: 960,
     minHeight: 640,
+    title: `TraceMemo ${app.getVersion()} 定制版`,
     center: true,
     show: false,
     autoHideMenuBar: true,

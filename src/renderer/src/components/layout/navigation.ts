@@ -1,7 +1,6 @@
 export type AppPage =
   | 'archive'
   | 'search'
-  | 'report'
   | 'exit-monitor'
   | 'automation'
   | 'agent-hub'
@@ -17,7 +16,6 @@ export interface NavigationItem {
 export const PRIMARY_NAV_ITEMS: NavigationItem[] = [
   { id: 'archive', label: '档案' },
   { id: 'search', label: '问问微信' },
-  { id: 'report', label: '日报' },
   { id: 'exit-monitor', label: '退群监控' },
   { id: 'automation', label: '自动化' },
   { id: 'agent-hub', label: 'Agent' },

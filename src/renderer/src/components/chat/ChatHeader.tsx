@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Contact } from '../../../../shared/types'
 import { Button, IconButton, Tooltip, TooltipContent, TooltipTrigger } from '../ui'
 import { ConversationContentSearch } from './ConversationContentSearch'
-import { AiIcon, RefreshIcon, SearchIcon, SendIcon, StatsIcon } from './icons'
+import { RefreshIcon, SearchIcon, SendIcon, StatsIcon } from './icons'
 import { supportsPersonalWechatSend } from '../../utils/runtime-environment'
 import { GroupMemberStatsDialog } from '../group-stats/GroupMemberStatsDialog'
 
@@ -12,11 +12,9 @@ interface ChatHeaderProps {
   loadedCount: number
   filteredCount: number
   contentFilter: string
-  isAiLoading: boolean
   onContentFilterChange: (value: string) => void
   onRefresh?: () => void
   onTestSend: () => void
-  onOpenAiSettings: () => void
   /** 跳到「设置 · 本地索引」（群统计发现索引没追平时用）。 */
   onOpenLocalIndexSettings?: () => void
 }
@@ -27,11 +25,9 @@ export function ChatHeader({
   loadedCount,
   filteredCount,
   contentFilter,
-  isAiLoading,
   onContentFilterChange,
   onRefresh,
   onTestSend,
-  onOpenAiSettings,
   onOpenLocalIndexSettings
 }: ChatHeaderProps): React.ReactElement {
   const [searchOpen, setSearchOpen] = useState(Boolean(contentFilter))
@@ -131,19 +127,6 @@ export function ChatHeader({
             <TooltipContent>仅支持 macOS 和 Windows</TooltipContent>
           </Tooltip>
         )}
-        <Button
-          variant="default"
-          size="sm"
-          className="chat-header-text-action"
-          aria-label={isAiLoading ? '生成中' : '生成 AI 日报'}
-          onClick={onOpenAiSettings}
-          disabled={isAiLoading}
-          aria-busy={isAiLoading}
-          title={isGroupChat ? '生成 AI 日报' : 'AI 日报当前仅支持群聊'}
-        >
-          <AiIcon />
-          <span>{isAiLoading ? '生成中' : '生成 AI 日报'}</span>
-        </Button>
       </div>
       {isGroupChat ? (
         <GroupMemberStatsDialog

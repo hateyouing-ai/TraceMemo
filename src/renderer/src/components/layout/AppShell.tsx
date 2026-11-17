@@ -1,4 +1,5 @@
 import React from 'react'
+import { CUSTOM_EDITION_LABEL } from '../../../../shared/custom-edition'
 import { AccountSummary } from '../account/AccountSummary'
 import { PrimaryNavigation } from './PrimaryNavigation'
 import { AppPage, PRIMARY_NAV_ITEMS } from './navigation'
@@ -18,15 +19,15 @@ interface AppShellProps {
   dbConnecting?: boolean
   onPageChange: (page: AppPage) => void
   onOpenSettings: () => void
-  onOpenGuide: () => void
   appearanceTheme?: 'system' | 'light' | 'dark'
   compactMode?: boolean
   children: React.ReactNode
 }
 
 function BrandLogo(): React.ReactElement {
+  const label = `TraceMemo（迹忆）${CUSTOM_EDITION_LABEL}`
   return (
-    <div className="app-brand" title="TraceMemo（迹忆）" aria-label="TraceMemo（迹忆）">
+    <div className="app-brand" title={label} aria-label={label}>
       <img src={brandIcon} alt="" aria-hidden="true" />
     </div>
   )
@@ -39,7 +40,6 @@ export function AppShell({
   dbConnecting = false,
   onPageChange,
   onOpenSettings,
-  onOpenGuide,
   appearanceTheme = 'system',
   compactMode = false,
   children
@@ -58,19 +58,6 @@ export function AppShell({
       <aside className="app-primary-rail">
         <BrandLogo />
         <PrimaryNavigation activePage={activePage} onPageChange={onPageChange} />
-        <button
-          type="button"
-          className="app-guide-launcher"
-          onClick={onOpenGuide}
-          title="重新打开新手引导"
-        >
-          <span className="app-guide-launcher-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" focusable="false">
-              <path d="M12 3 14.2 9.8 21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2L12 3Z" />
-            </svg>
-          </span>
-          <span className="app-guide-launcher-label">新手引导</span>
-        </button>
         <div className="app-rail-account">
           <AccountSummary
             selfInfo={selfInfo}

@@ -9,6 +9,7 @@ const api = {
   checkAppUpdate: vi.fn(),
   downloadAppUpdate: vi.fn(),
   getAppUpdateState: vi.fn(),
+  getIgnoredUpdateVersion: vi.fn(),
   getSettings: vi.fn(),
   installAppUpdate: vi.fn(),
   onAppUpdateState: vi.fn(),
@@ -25,6 +26,7 @@ describe('basic settings pages', () => {
       currentVersion: '2.2.2',
       delivery: 'automatic'
     })
+    api.getIgnoredUpdateVersion.mockResolvedValue(null)
     api.onAppUpdateState.mockReturnValue(vi.fn())
     api.checkAppUpdate.mockResolvedValue({
       success: true,
@@ -40,6 +42,8 @@ describe('basic settings pages', () => {
     render(<AboutPage onNotice={vi.fn()} />)
 
     await screen.findByText('v2.2.2')
+    expect(screen.getByText(/定制版 · 无新手引导 · 无日报页/)).toBeVisible()
+    expect(screen.getByText(/基于上游 2\.6\.0/)).toBeVisible()
     await user.click(screen.getByRole('button', { name: '检查更新' }))
     await user.click(screen.getByRole('button', { name: '打开诊断日志目录' }))
 
