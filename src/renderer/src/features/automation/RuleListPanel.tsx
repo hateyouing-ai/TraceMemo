@@ -8,6 +8,7 @@ import {
   describeRuleTrigger,
   type AutomationRule
 } from '../../../../shared/automation'
+import { DAILY_REPORT_DISABLED_MESSAGE } from '../../../../shared/daily-report-feature'
 import { Button, Spinner, Switch } from '../../components/ui'
 
 /**
@@ -108,6 +109,8 @@ export function RuleListPanel({
           <span className="automation-section-note">{configuredCount} 条</span>
         </div>
 
+        <p className="automation-section-lead">{DAILY_REPORT_DISABLED_MESSAGE}</p>
+
         {loading ? (
           <div className="automation-loading">
             <Spinner />
@@ -118,7 +121,9 @@ export function RuleListPanel({
             {!configuredRules.length && !leaveRule ? (
               <div className="automation-empty-card">
                 <p>还没有任何自动化。</p>
-                <Button onClick={onCreate}>新建自动化</Button>
+                <Button disabled title={DAILY_REPORT_DISABLED_MESSAGE} onClick={onCreate}>
+                  新建自动化
+                </Button>
               </div>
             ) : null}
 
@@ -130,8 +135,12 @@ export function RuleListPanel({
                 <div className="automation-rule-card-main">
                   <div className="automation-rule-card-title">
                     <h3>{rule.name}</h3>
-                    <span className={`automation-rule-state ${rule.enabled ? 'on' : 'off'}`}>
-                      {rule.enabled ? '运行中' : '已停用'}
+                    <span className="automation-rule-state off">
+                      {rule.ruleType === 'daily_report'
+                        ? '不会执行'
+                        : rule.enabled
+                          ? '运行中'
+                          : '已停用'}
                     </span>
                   </div>
                   <dl className="automation-rule-meta">

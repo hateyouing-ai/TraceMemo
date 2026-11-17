@@ -22,10 +22,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] }
 }))
 
-import {
-  AUTOMATION_SEND_PURPOSE,
-  BUILTIN_DAILY_REPORT_RULE_ID
-} from '../../src/shared/automation'
+import { AUTOMATION_SEND_PURPOSE, BUILTIN_DAILY_REPORT_RULE_ID } from '../../src/shared/automation'
 import type {
   PersonalWechatSendCapability,
   PersonalWechatSendRequest
@@ -155,7 +152,8 @@ function buildChain(): Chain {
     ruleStore: store,
     executionLog: log,
     runner,
-    getCapability: async () => readyCapability()
+    getCapability: async () => readyCapability(),
+    dailyReportExecutionEnabled: true
   })
 
   return { service, log, store, gateway, sends, reports }

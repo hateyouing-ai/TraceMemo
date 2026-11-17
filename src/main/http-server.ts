@@ -14,7 +14,6 @@ import {
 } from './services/chat-service'
 import { exportGroupReport } from './group-report-service'
 import { GroupReportExportRequest } from '../shared/group-report'
-import { generateAgentGroupReport } from './services/agent-group-report-service'
 import { scheduledReportService } from './services/scheduled-report-service'
 import { personalWechatCapabilityService } from './services/personal-wechat-capability-service'
 import {
@@ -522,20 +521,13 @@ const routes: Record<string, RouteHandler> = {
     sendJson(res, result.success ? 200 : 500, result)
   }),
 
-  '/api/v1/agent/group-report': withMethods(['POST'], async ({ req, res, body }) => {
+  '/api/v1/agent/group-report': withMethods(['POST'], async ({ req, res }) => {
     if (req.method !== 'POST') return sendError(res, 405, '需要 POST 请求')
-    if (!isReady()) return sendError(res, 503, 'TraceMemo 数据库未初始化')
-    let request: { group?: string; range?: 'today' | 'yesterday' | '7days' }
-    try {
-      request = JSON.parse(typeof body === 'string' ? body : '{}')
-    } catch {
-      return sendError(res, 400, '请求体 JSON 解析失败')
-    }
-    const result = await generateAgentGroupReport({
-      group: request.group || '',
-      range: request.range
-    })
-    sendJson(res, result.success ? 200 : 400, result)
+    return sendError(
+      res,
+      403,
+      '定制版已关闭日报。这个接口不再生成群聊日报，已保存的日报文件不会删除。'
+    )
   }),
 
   '/api/v1/agent/status': withMethods(['GET'], ({ res }) => {

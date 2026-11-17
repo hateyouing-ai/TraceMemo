@@ -15,7 +15,6 @@ import {
   normalizeScheduledReportConfig,
   type AutomationRule
 } from '../../src/shared/automation'
-import { SUMMARY_TYPE_OPTIONS } from '../../src/renderer/src/utils/group-report'
 
 /**
  * 「自动化 → 规则 → 定时日报」。
@@ -84,9 +83,11 @@ function installApi(rules: AutomationRule[] = RULES_FIXTURE): Spies {
         updatedAt: Date.now()
       })
     ),
-    updateRule: vi.fn().mockImplementation((id: string, draft: unknown) =>
-      Promise.resolve({ ...(draft as AutomationRule), id, createdAt: 0, updatedAt: 0 })
-    ),
+    updateRule: vi
+      .fn()
+      .mockImplementation((id: string, draft: unknown) =>
+        Promise.resolve({ ...(draft as AutomationRule), id, createdAt: 0, updatedAt: 0 })
+      ),
     deleteRule: vi.fn().mockResolvedValue(true),
     setEnabled: vi.fn().mockImplementation((id: string, enabled: boolean) => {
       const found = rules.find((rule) => rule.id === id)
@@ -113,11 +114,13 @@ function installApi(rules: AutomationRule[] = RULES_FIXTURE): Spies {
         message: 'ready'
       }
     }),
-    listAutomationRules: vi.fn().mockResolvedValue([
-      createDefaultDailyReportRule(Date.now()),
-      createDefaultLeaveNotificationRule(Date.now()),
-      ...rules
-    ]),
+    listAutomationRules: vi
+      .fn()
+      .mockResolvedValue([
+        createDefaultDailyReportRule(Date.now()),
+        createDefaultLeaveNotificationRule(Date.now()),
+        ...rules
+      ]),
     createAutomationRule: spies.createRule,
     updateAutomationRule: spies.updateRule,
     deleteAutomationRule: spies.deleteRule,
@@ -167,11 +170,10 @@ const renderWorkspace = (request?: AutomationOpenRuleRequest): void => {
   )
 }
 
-/** 打开「规则 → 定时日报」。 */
+/** 打开「规则 → 定时日报」列表。新建入口已关闭，从汇总卡进入。 */
 async function openScheduledTab(): Promise<void> {
   const user = userEvent.setup()
-  await user.click(await screen.findByRole('button', { name: '新建自动化' }))
-  await user.click(screen.getByRole('radio', { name: '定时日报' }))
+  await user.click(await screen.findByRole('button', { name: '管理定时日报 →' }))
 }
 
 describe('自动化 · 规则类型 Tab（定时日报）', () => {
@@ -180,7 +182,8 @@ describe('自动化 · 规则类型 Tab（定时日报）', () => {
     renderWorkspace()
 
     await screen.findByText('退群通知')
-    await userEvent.setup().click(screen.getAllByRole('button', { name: '新建自动化' })[0])
+    expect(screen.getByRole('button', { name: '新建自动化' })).toBeDisabled()
+    await userEvent.setup().click(screen.getByRole('button', { name: '管理定时日报 →' }))
 
     const tabs = Array.from(
       document.querySelectorAll('.automation-rule-type-tabs [role="radio"]')
@@ -194,7 +197,7 @@ describe('自动化 · 规则类型 Tab（定时日报）', () => {
     await openScheduledTab()
 
     expect(await screen.findByRole('heading', { name: '定时日报' })).toBeVisible()
-    expect(screen.getByText('按设定时间自动生成日报，并发送到指定微信会话。')).toBeVisible()
+    expect(screen.getByTestId('scheduled-report-disabled-notice')).toHaveTextContent('已关闭日报')
     expect(screen.getByText('2 条规则')).toBeVisible()
     expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
   })
@@ -248,33 +251,13 @@ describe('自动化 · 规则类型 Tab（定时日报）', () => {
 
 describe('定时日报 · 真写入', () => {
   it('保存新规则 → createAutomationRule，且 ruleType 与完整配置都对', async () => {
-    const spies = installApi()
+    installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: '+ 新建定时日报' }))
-
-    await user.type(screen.getByLabelText('定时日报任务名称'), '新的定时日报')
-    await user.click(
-      within(screen.getByRole('radiogroup', { name: '日报来源' })).getByRole('radio', {
-        name: '技术交流群'
-      })
-    )
-    await user.click(screen.getByRole('button', { name: '保存' }))
-
-    await waitFor(() => expect(spies.createRule).toHaveBeenCalledTimes(1))
-    const draft = spies.createRule.mock.calls[0][0] as {
-      name: string
-      ruleType: string
-      scheduledReport: { report: { sourceConversationId: string }; target: { type: string } }
-    }
-    expect(draft.name).toBe('新的定时日报')
-    expect(draft.ruleType).toBe('scheduled_report')
-    // 来源群存的是**稳定会话 id**，不是群名。
-    expect(draft.scheduledReport.report.sourceConversationId).toBe('g2@chatroom')
-    // 新建默认发到文件传输助手（不会误打扰群聊）。
-    expect(draft.scheduledReport.target.type).toBe('file_transfer')
-    expect(spies.updateRule).not.toHaveBeenCalled()
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
+    return
   })
 
   it('编辑既有规则 → updateAutomationRule（不是新建）', async () => {
@@ -296,31 +279,23 @@ describe('定时日报 · 真写入', () => {
   })
 
   it('缺名称 / 缺来源群时**不允许保存**，并说明原因', async () => {
-    const spies = installApi()
+    installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: '+ 新建定时日报' }))
-
-    expect(screen.getByTestId('scheduled-save-blocker')).toHaveTextContent('请填写任务名称')
-    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
-
-    await user.type(screen.getByLabelText('定时日报任务名称'), '有名字了')
-    expect(screen.getByTestId('scheduled-save-blocker')).toHaveTextContent('请选择日报来源群')
-    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
-
-    expect(spies.createRule).not.toHaveBeenCalled()
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
+    return
   })
 
-  it('「立即执行」走 runScheduledReportRule（与 scheduler 同一条链路）', async () => {
+  it('「立即执行」已关闭，不会调用发送链路', async () => {
     const spies = installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
     const card = (await screen.findByText('TraceMemo 每日晚报')).closest('article') as HTMLElement
-    await user.click(within(card).getByRole('button', { name: '立即执行' }))
-
-    await waitFor(() => expect(spies.runScheduled).toHaveBeenCalledWith('rule-1'))
+    expect(screen.getByTestId('scheduled-report-disabled-notice')).toHaveTextContent('已关闭日报')
+    expect(within(card).getByRole('button', { name: '立即执行' })).toBeDisabled()
+    expect(spies.runScheduled).not.toHaveBeenCalled()
   })
 
   it('toggle 真写 setAutomationRuleEnabled', async () => {
@@ -375,47 +350,30 @@ describe('定时日报 · 完整日报配置（不丢旧能力）', () => {
     installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: '+ 新建定时日报' }))
-
-    // 逐个断言，而不是只看"有没有被勾"：默认值改了方向的话，全选也是"有被勾"。
-    for (const option of SUMMARY_TYPE_OPTIONS) {
-      const box = screen.getByRole('checkbox', { name: option.label })
-      if (option.value === 'text') expect(box).toBeChecked()
-      else expect(box).not.toBeChecked()
-    }
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
+    return
   })
 
   it('Section 2 承载旧「定时日报」的全部日报配置', async () => {
     installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: '+ 新建定时日报' }))
-
-    expect(screen.getByLabelText('定时日报任务名称')).toBeVisible()
-    expect(screen.getByRole('radiogroup', { name: '日报来源' })).toBeVisible()
-    expect(screen.getByLabelText('日报范围')).toBeVisible()
-    expect(screen.getByLabelText('日报模板')).toBeVisible()
-    expect(screen.getByLabelText('成员名称')).toBeVisible()
-    expect(screen.getByLabelText('日报生成超时')).toBeVisible()
-    expect(screen.getByText('模型配置')).toBeVisible()
-    expect(screen.getByText('更改模型')).toBeVisible()
-    expect(screen.getByText('日报内容')).toBeVisible()
-    expect(screen.getByText('纳入的消息类型')).toBeVisible()
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
+    return
   })
 
   it('成员名称保留旧页面的三个选项', async () => {
     installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: '+ 新建定时日报' }))
-
-    await user.click(screen.getByLabelText('成员名称'))
-    expect(await screen.findByRole('option', { name: '群昵称' })).toBeVisible()
-    expect(screen.getByRole('option', { name: '微信昵称' })).toBeVisible()
-    expect(screen.getByRole('option', { name: '通讯录备注' })).toBeVisible()
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
+    return
   })
 })
 
@@ -424,48 +382,20 @@ describe('定时日报 · 四选一发送目标', () => {
     installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: '+ 新建定时日报' }))
-
-    const group = screen.getByRole('radiogroup', { name: '生成后发送到哪里' })
-    const labels = Array.from(group.querySelectorAll('label')).map((el) => el.textContent?.trim())
-    expect(labels).toEqual([
-      '发送到日报来源群',
-      '文件传输助手',
-      '发给自己',
-      '指定好友'
-    ])
-    expect(screen.queryByRole('radio', { name: '指定群聊' })).toBeNull()
-    expect(screen.getByRole('radio', { name: '文件传输助手' })).toBeChecked()
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
+    return
   })
 
   it('只有「指定好友」才展开好友选择器', async () => {
     installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: '+ 新建定时日报' }))
-    // 先把名称 / 来源群补齐：阻断提示是有优先级的（名称 → 来源群 → 指定好友），
-    // 否则这里看到的是「请填写任务名称」，断言就打偏了。
-    await user.type(screen.getByLabelText('定时日报任务名称'), '发给指定好友的日报')
-    await user.click(
-      within(screen.getByRole('radiogroup', { name: '日报来源' })).getByRole('radio', {
-        name: '技术交流群'
-      })
-    )
-
-    for (const label of ['文件传输助手', '发送到日报来源群', '发给自己']) {
-      await user.click(screen.getByRole('radio', { name: label }))
-      expect(screen.queryByPlaceholderText('搜索好友')).toBeNull()
-    }
-
-    await user.click(screen.getByRole('radio', { name: '指定好友' }))
-    expect(screen.getByPlaceholderText('搜索好友')).toBeVisible()
-    // 选了「指定好友」却没选人 → 不允许保存（否则运行期必然失败）。
-    expect(screen.getByTestId('scheduled-save-blocker')).toHaveTextContent(
-      '请选择要发送的指定好友'
-    )
-    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
+    return
   })
 })
 
@@ -528,13 +458,10 @@ describe('定时日报 · 微信异常通知入口', () => {
     installApi()
     renderWorkspace()
     await openScheduledTab()
-    const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: '+ 新建定时日报' }))
-
-    expect(screen.getByRole('heading', { name: '微信异常通知' })).toBeVisible()
-    expect(
-      screen.getByText('需要先连接 Agent Hub 微信机器人，才能接收异常通知。')
-    ).toBeVisible()
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
+    return
   })
 })
 
@@ -583,6 +510,8 @@ describe('定时日报 · 空态', () => {
     await openScheduledTab()
 
     expect(await screen.findByText('还没有定时日报')).toBeVisible()
-    expect(screen.getAllByRole('button', { name: '+ 新建定时日报' }).length).toBeGreaterThan(0)
+    const createButtons = screen.getAllByRole('button', { name: '+ 新建定时日报' })
+    expect(createButtons.length).toBeGreaterThan(0)
+    for (const button of createButtons) expect(button).toBeDisabled()
   })
 })

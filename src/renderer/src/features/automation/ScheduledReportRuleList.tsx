@@ -1,5 +1,6 @@
 import * as React from 'react'
 
+import { DAILY_REPORT_DISABLED_MESSAGE } from '../../../../shared/daily-report-feature'
 import { Button, Spinner, Switch } from '../../components/ui'
 import {
   calculateNextRunAt,
@@ -75,12 +76,14 @@ export function ScheduledReportRuleList({
           </span>
         </div>
 
-        <p className="automation-section-lead">
-          按设定时间自动生成日报，并发送到指定微信会话。
+        <p className="automation-section-lead" data-testid="scheduled-report-disabled-notice">
+          {DAILY_REPORT_DISABLED_MESSAGE}
         </p>
 
         <div className="automation-scheduled-toolbar">
-          <Button onClick={onCreate}>+ 新建定时日报</Button>
+          <Button disabled title={DAILY_REPORT_DISABLED_MESSAGE} onClick={onCreate}>
+            + 新建定时日报
+          </Button>
           {rules.length > 0 ? (
             <span className="automation-section-note">
               运行中 {runningCount} / {rules.length}
@@ -97,7 +100,9 @@ export function ScheduledReportRuleList({
           <div className="automation-empty-card">
             <p>还没有定时日报</p>
             <p>创建一条自动化，让 TraceMemo 在指定时间生成并发送日报。</p>
-            <Button onClick={onCreate}>+ 新建定时日报</Button>
+            <Button disabled title={DAILY_REPORT_DISABLED_MESSAGE} onClick={onCreate}>
+              + 新建定时日报
+            </Button>
           </div>
         ) : (
           rules.map((rule) => {
@@ -167,7 +172,8 @@ export function ScheduledReportRuleList({
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={busy || needsReview}
+                    disabled
+                    title={DAILY_REPORT_DISABLED_MESSAGE}
                     onClick={() => onRunNow(rule)}
                   >
                     立即执行
@@ -175,12 +181,7 @@ export function ScheduledReportRuleList({
                   <Button variant="outline" size="sm" disabled={busy} onClick={() => onEdit(rule)}>
                     编辑
                   </Button>
-                  <Button
-                    variant="link"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => onDelete(rule)}
-                  >
+                  <Button variant="link" size="sm" disabled={busy} onClick={() => onDelete(rule)}>
                     删除
                   </Button>
                 </div>

@@ -95,6 +95,7 @@ async function makeHarness(
     getAgentHubStatus: onlineAgentHubStatus,
     isDatabaseReady: () => true,
     now: () => AFTER_SLOT,
+    reportExecutionEnabled: true,
     ...overrides
   } as unknown as ScheduledReportDependencies
   const service = new ScheduledReportService(deps)

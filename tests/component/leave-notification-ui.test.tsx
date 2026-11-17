@@ -130,10 +130,12 @@ async function leaveNotificationCard(): Promise<HTMLElement> {
 }
 
 /** 从自动化首页那张退群通知卡片的「编辑」进编辑器。 */
-async function openLeaveNotificationEditor(overrides: {
-  leaveRule?: AutomationRule
-  automationGroups?: Array<{ id: string; name: string }>
-} = {}): Promise<{ spies: ApiSpies }> {
+async function openLeaveNotificationEditor(
+  overrides: {
+    leaveRule?: AutomationRule
+    automationGroups?: Array<{ id: string; name: string }>
+  } = {}
+): Promise<{ spies: ApiSpies }> {
   const user = userEvent.setup()
   const { spies } = installApi(overrides)
   renderWithProviders(<AutomationWorkspace dbReady onOpenExitMonitorGroups={() => {}} />)
@@ -165,8 +167,10 @@ describe('自动化 · 规则类型 Tab', () => {
     renderWithProviders(<AutomationWorkspace dbReady />)
 
     await screen.findByText('退群通知')
-    await user.click(screen.getAllByRole('button', { name: '新建自动化' })[0])
-    expect(screen.getByLabelText('关键词')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '新建自动化' })).toBeDisabled()
+    const homeCard = screen.getByText('退群通知').closest('article') as HTMLElement
+    await user.click(within(homeCard).getByRole('button', { name: '编辑' }))
+    expect(screen.getByLabelText('退群通知模板内容')).toBeInTheDocument()
 
     await user.click(screen.getByRole('radio', { name: '退群通知' }))
     expect(screen.getByLabelText('退群通知模板内容')).toBeInTheDocument()
@@ -472,7 +476,9 @@ describe('退群通知 · 效果预览', () => {
     expect(previewFact('触发事件')).toBe('成员退出')
     expect(previewFact('监控来源')).toBe('3 个已监控群聊')
     expect(previewFact('通知目标')).toBe('发生退群事件的群聊')
-    expect(document.querySelector('.automation-preview-facts')?.textContent).not.toContain('执行方式')
+    expect(document.querySelector('.automation-preview-facts')?.textContent).not.toContain(
+      '执行方式'
+    )
 
     await user.click(targetRadio('文件传输助手'))
     expect(previewFact('通知目标')).toBe('文件传输助手')
@@ -498,7 +504,9 @@ describe('退群通知 · 效果预览', () => {
   it('编辑器里不出现底层实现词', async () => {
     await openLeaveNotificationEditor()
 
-    expect(document.body.textContent).not.toMatch(/AutomationRule|trigger matcher|ActionRunner|WCDB/)
+    expect(document.body.textContent).not.toMatch(
+      /AutomationRule|trigger matcher|ActionRunner|WCDB/
+    )
   })
 })
 
@@ -559,9 +567,7 @@ describe('退群通知 · 通知内容与变量', () => {
 
     const chips = Array.from(document.querySelectorAll('.automation-leave-template-chip'))
     const titleOf = (token: string): string =>
-      chips
-        .find((chip) => chip.textContent?.trim() === token)
-        ?.getAttribute('title') ?? ''
+      chips.find((chip) => chip.textContent?.trim() === token)?.getAttribute('title') ?? ''
 
     expect(titleOf('{groupName}')).toBe('{groupName}：群聊名（发生退群的群）')
     expect(titleOf('{groupRemark}')).toContain('不是群名')
@@ -719,9 +725,7 @@ describe('退群通知 · 规则缺失时的兜底', () => {
 
     const before = spies.listAutomationRules.mock.calls.length
     await user.click(screen.getByRole('button', { name: '重新加载' }))
-    await waitFor(() =>
-      expect(spies.listAutomationRules.mock.calls.length).toBeGreaterThan(before)
-    )
+    await waitFor(() => expect(spies.listAutomationRules.mock.calls.length).toBeGreaterThan(before))
   })
 
   it('重试后规则回来了就直接进编辑器', async () => {
