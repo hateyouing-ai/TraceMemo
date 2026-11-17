@@ -26,6 +26,7 @@ import type {
   ScheduledReportApiUpdateRequest
 } from '../shared/scheduled-report-api'
 import { agentHubService } from './services/agent-hub-service'
+import { inquirySessionFeed } from './services/inquiry-session-feed'
 import { safeError, safeLog, safeWarn } from './safe-log'
 import { apiTokenStore } from './api-token-store'
 import { READER_SKILL_NAME, skillResourceService } from './services/skill-resource-service'
@@ -423,6 +424,14 @@ const routes: Record<string, RouteHandler> = {
       )
     }
     sendJson(res, 200, { count: groups.length, chatrooms: groups })
+  }),
+
+  '/api/v1/inquiry-sessions': withMethods(['GET'], async ({ res }) => {
+    try {
+      sendJson(res, 200, await inquirySessionFeed())
+    } catch {
+      sendError(res, 503, 'Session metadata unavailable')
+    }
   }),
 
   '/api/v1/recent_chat': withMethods(['GET'], ({ res, url }) => {

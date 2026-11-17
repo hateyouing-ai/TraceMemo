@@ -30,7 +30,10 @@ function buildBundle(options: { dirty?: boolean; corruptHash?: boolean } = {}): 
   const versionDir = path.join(localAppData, 'TraceMemo', 'Pro', 'windows-x64', '1.0.0')
   const wcdbApi = writeFile(path.join(versionDir, 'wcdb_api.dll'), Buffer.alloc(2048, 0x11))
   const wcdb = writeFile(path.join(versionDir, 'WCDB.dll'), Buffer.alloc(4096, 0x22))
-  const helper = writeFile(path.join(versionDir, 'tm-wcdb-config-helper.exe'), Buffer.alloc(1024, 0x33))
+  const helper = writeFile(
+    path.join(versionDir, 'tm-wcdb-config-helper.exe'),
+    Buffer.alloc(1024, 0x33)
+  )
 
   const manifest = {
     schemaVersion: 1,
@@ -69,6 +72,43 @@ afterEach(() => {
 const env = (): NodeJS.ProcessEnv => ({ LOCALAPPDATA: localAppData })
 
 describe('resolveExternalComponent', () => {
+  it('按 current.json 选择 e82ddb97，并忽略清单里的额外字段', () => {
+    const versionDir = path.join(localAppData, 'TraceMemo', 'Pro', 'windows-x64', 'e82ddb97')
+    const wcdbApi = writeFile(path.join(versionDir, 'wcdb_api.dll'), Buffer.alloc(16, 0x41))
+    const wcdb = writeFile(path.join(versionDir, 'WCDB.dll'), Buffer.alloc(16, 0x42))
+    const helper = writeFile(
+      path.join(versionDir, 'tm-wcdb-config-helper.exe'),
+      Buffer.alloc(16, 0x43)
+    )
+    writeFile(
+      path.join(versionDir, 'manifest.json'),
+      JSON.stringify({
+        product: 'TraceMemo',
+        edition: 'pro',
+        platform: 'windows',
+        arch: 'x64',
+        componentVersion: 'e82ddb97',
+        wchookCommit: 'e82ddb97a3a44cc3a3f2961da933d1d4ae9e8339',
+        dllCommit: '271f4787d4160a30cd4d5379f99f65235e619561',
+        worktreeDirty: false,
+        files: [
+          { path: 'wcdb_api.dll', size: wcdbApi.length, sha256: sha256(wcdbApi) },
+          { path: 'WCDB.dll', size: wcdb.length, sha256: sha256(wcdb) },
+          { path: 'tm-wcdb-config-helper.exe', size: helper.length, sha256: sha256(helper) }
+        ]
+      })
+    )
+    writeFile(
+      path.join(localAppData, 'TraceMemo', 'Pro', 'windows-x64', 'current.json'),
+      JSON.stringify({ version: 'e82ddb97', dir: versionDir })
+    )
+
+    const found = resolveExternalComponent(env(), 'win32')
+    expect(found?.version).toBe('e82ddb97')
+    expect(found?.helperPath).toBe(path.join(versionDir, 'tm-wcdb-config-helper.exe'))
+    expect(found?.dirty).toBe(false)
+  })
+
   it('没有 current.json 时返回 null（= 组件没装）', () => {
     expect(resolveExternalComponent(env(), 'win32')).toBeNull()
   })

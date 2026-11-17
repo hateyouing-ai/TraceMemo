@@ -15,7 +15,7 @@ describe('custom edition identity', () => {
     const win = readFileSync('electron-builder.win.yml', 'utf8')
     const mac = readFileSync('electron-builder.yml', 'utf8')
 
-    expect(pkg.version).toBe('2.6.1-custom.1')
+    expect(pkg.version).toBe('2.6.1-custom.2')
     expect(pkg.version).not.toBe(UPSTREAM_BASE_VERSION)
     expect(CUSTOM_EDITION_ID).toBe('phase1-no-guide-no-report')
     expect(CUSTOM_EDITION_LABEL).toContain('无新手引导')
