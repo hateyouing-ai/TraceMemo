@@ -31,7 +31,10 @@ import { AutomationRuleStore } from '../../src/main/services/automation-rule-sto
 import { AutomationExecutionLogService } from '../../src/main/services/automation-execution-log-service'
 import { AutomationActionRunner } from '../../src/main/services/automation-action-runner'
 import type { NormalizedIncomingMessage } from '../../src/main/services/message-listener-service'
-import type { AutomationRunInput, AutomationRunResult } from '../../src/main/services/automation-action-runner'
+import type {
+  AutomationRunInput,
+  AutomationRunResult
+} from '../../src/main/services/automation-action-runner'
 
 /**
  * AutomationService 的编排语义：四道闸 + 执行日志落盘 + 发送能力预检。
@@ -42,7 +45,9 @@ const GROUP_ID = '12345678@chatroom'
 const OTHER_GROUP = '87654321@chatroom'
 
 /** 完整可用的发送能力替身（不用强转，避免类型加字段后静默失真）。 */
-function capability(overrides: Partial<PersonalWechatSendCapability> = {}): PersonalWechatSendCapability {
+function capability(
+  overrides: Partial<PersonalWechatSendCapability> = {}
+): PersonalWechatSendCapability {
   return {
     supported: true,
     ready: true,
@@ -148,6 +153,7 @@ function buildHarness(
     runner: spyRunner,
     getCapability: async () => currentCapability,
     isListening: () => true,
+    dailyReportExecutionEnabled: true,
     ...(options.now ? { now: options.now } : {}),
     ...(options.gateMaxEntries !== undefined ? { gateMaxEntries: options.gateMaxEntries } : {})
   })
@@ -252,7 +258,9 @@ describe('AutomationService', () => {
 
   it('自己发送的消息不触发（否则「收到，正在生成今日日报」会形成死循环）', async () => {
     const harness = buildHarness()
-    await harness.service.handleMessage(message({ isSelf: true, content: '收到，正在生成今日日报' }))
+    await harness.service.handleMessage(
+      message({ isSelf: true, content: '收到，正在生成今日日报' })
+    )
 
     expect(harness.runs).toHaveLength(0)
     expect(harness.log.list()).toHaveLength(0)
@@ -275,7 +283,10 @@ describe('AutomationService', () => {
   it('不在生效范围内的群不触发', async () => {
     const harness = buildHarness()
     const rule = harness.store.listRules()[0]
-    harness.store.updateRule(rule.id, { ...rule, conditions: { ...rule.conditions, conversationIds: [OTHER_GROUP] } })
+    harness.store.updateRule(rule.id, {
+      ...rule,
+      conditions: { ...rule.conditions, conversationIds: [OTHER_GROUP] }
+    })
     await harness.service.handleMessage(message())
     expect(harness.runs).toHaveLength(0)
   })
@@ -324,7 +335,8 @@ describe('AutomationService', () => {
           ...(input ? {} : {})
         })
       } as unknown as AutomationActionRunner,
-      getCapability: async () => capability()
+      getCapability: async () => capability(),
+      dailyReportExecutionEnabled: true
     })
 
     await service.handleMessage(message())
@@ -640,9 +652,7 @@ describe('AutomationService · gate 缓存清理', () => {
     harness.store.updateRule(seeded.id, { ...seeded, cooldownSeconds: 0 })
 
     // A 群：开始执行并**挂住**（gate A 处于 inFlight）
-    const runningA = harness.service.handleMessage(
-      message({ localId: 'a1', sessionId: GROUP_A })
-    )
+    const runningA = harness.service.handleMessage(message({ localId: 'a1', sessionId: GROUP_A }))
     await started
     expect(harness.runs).toHaveLength(1)
 

@@ -65,10 +65,8 @@ function renderHeader(contact: Contact, isGroupChat: boolean): void {
         loadedCount={10}
         filteredCount={10}
         contentFilter=""
-        isAiLoading={false}
         onContentFilterChange={vi.fn()}
         onTestSend={vi.fn()}
-        onOpenAiSettings={vi.fn()}
       />
     </TooltipProvider>
   )

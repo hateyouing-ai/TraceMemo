@@ -356,6 +356,7 @@ for (const appearanceTheme of ['light', 'dark'] as const) {
   })
 
   test(`REPORT-00 report configuration controls ${appearanceTheme} visual @visual`, async () => {
+    test.skip(true, '日报页已从定制版移除，不再拍摄该页面截图')
     const fixture = await launchTestApp({ now: visualNow, appearanceTheme })
     const pageErrors: Error[] = []
     fixture.page.on('pageerror', (error) => pageErrors.push(error))
@@ -411,6 +412,7 @@ for (const appearanceTheme of ['light', 'dark'] as const) {
 
 for (const appearanceTheme of ['light', 'dark'] as const) {
   test(`REPORT-01 report retry controls ${appearanceTheme} visual @visual`, async () => {
+    test.skip(true, '日报页已从定制版移除，不再拍摄该页面截图')
     const fixture = await launchTestApp({
       now: visualNow,
       aiFailure: '401',

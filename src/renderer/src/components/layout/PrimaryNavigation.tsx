@@ -29,15 +29,6 @@ function NavIcon({ page }: NavIconProps): React.ReactElement {
           <path d="m15 15 4 4" />
         </svg>
       )
-    case 'report':
-      return (
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M7 4.5h7l3 3v12H7z" />
-          <path d="M14 4.5v3h3" />
-          <path d="M9.5 13.5h5" />
-          <path d="M9.5 16.5h4" />
-        </svg>
-      )
     case 'exit-monitor':
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">

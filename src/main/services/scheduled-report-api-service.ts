@@ -241,12 +241,12 @@ export class ScheduledReportApiService {
   }
 
   async run(taskId: string): Promise<ScheduledReportExecution> {
-    this.assertDatabaseReady()
-    const result = await this.deps.service.runScheduledReportNow(taskId)
-    if (!result.data) {
-      throw new ScheduledReportApiError(404, 'not_found', result.error || '未找到定时日报任务')
-    }
-    return result.data
+    void taskId
+    throw new ScheduledReportApiError(
+      403,
+      'feature_disabled',
+      '定制版已关闭日报。这条定时日报任务仍保留，但不会再生成或发送。'
+    )
   }
 
   /**
@@ -257,11 +257,12 @@ export class ScheduledReportApiService {
    * 语义，不如**明确返回 501**。
    * 用户的替代路径：在日报历史里手动转发，或对该规则点「立即执行」重跑一次。
    */
-  async retrySend(_executionId: string): Promise<ScheduledReportExecution> {
+  async retrySend(executionId: string): Promise<ScheduledReportExecution> {
+    void executionId
     throw new ScheduledReportApiError(
       501,
       'not_supported',
-      '当前运行时不支持重新发送日报；请在 TraceMemo 的自动化页面使用「立即执行」，或从日报历史手动转发。'
+      '定制版已关闭日报，不能重新发送。已保存的日报文件和定时规则仍保留。'
     )
   }
 

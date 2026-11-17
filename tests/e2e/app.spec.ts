@@ -4,11 +4,9 @@ import { tmpdir } from 'os'
 import { resolve } from 'path'
 import { launchTestApp } from './support/electron'
 
-async function dismissFirstUseWelcome(page: import('@playwright/test').Page): Promise<void> {
-  const welcome = page.getByRole('dialog', { name: '开始探索你的微信' })
-  await expect(welcome).toBeVisible()
-  await welcome.getByRole('button', { name: '关闭' }).click()
-  await expect(welcome).toHaveCount(0)
+async function expectNoFirstUseWelcome(page: import('@playwright/test').Page): Promise<void> {
+  await expect(page.getByRole('dialog', { name: '开始探索你的微信' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '新手引导' })).toHaveCount(0)
 }
 
 test('APP-01 first launch renders a usable connection screen without uncaught errors', async () => {
@@ -44,7 +42,7 @@ test('KEY-01 KEY-02 invalid key remains recoverable and valid key enters the app
     await expect(keyInput).toBeVisible()
     await keyInput.fill('a'.repeat(64))
     await fixture.page.getByRole('button', { name: '连接数据库' }).click()
-    await dismissFirstUseWelcome(fixture.page)
+    await expectNoFirstUseWelcome(fixture.page)
     await expect(fixture.page.getByRole('navigation', { name: '一级导航' })).toBeVisible()
   } finally {
     await fixture.close()
@@ -67,7 +65,7 @@ test('P0-01 an invalid directory can be corrected and retried without restarting
     await fixture.page.getByRole('button', { name: '选择目录' }).click()
     await expect(fixture.page.getByLabel('微信数据目录')).toHaveValue('fixture-account')
     await fixture.page.getByRole('button', { name: '连接数据库' }).click()
-    await dismissFirstUseWelcome(fixture.page)
+    await expectNoFirstUseWelcome(fixture.page)
     await expect(fixture.page.getByRole('navigation', { name: '一级导航' })).toBeVisible()
   } finally {
     await fixture.close()
@@ -95,7 +93,7 @@ test('P2-01 P2-02 guided connection exposes safe diagnostics and completes all s
     })
     await expect(verifyConnection).toBeEnabled()
     await verifyConnection.click()
-    await dismissFirstUseWelcome(fixture.page)
+    await expectNoFirstUseWelcome(fixture.page)
     await expect(fixture.page.getByRole('navigation', { name: '一级导航' })).toBeVisible()
   } finally {
     await fixture.close()
@@ -127,7 +125,7 @@ test('KEY-03 changing one key does not invalidate archive data or unrelated sett
 
 test('NAV-01 NAV-02 every top-level page is unique and switchable', async () => {
   const fixture = await launchTestApp()
-  const labels = ['档案', '问问微信', '日报', '退群监控', 'Agent', '导出', 'API', '设置']
+  const labels = ['档案', '问问微信', '退群监控', 'Agent', '导出', 'API', '设置']
   try {
     const navigation = fixture.page.getByRole('navigation', { name: '一级导航' })
     await expect(navigation).toBeVisible()
@@ -151,12 +149,13 @@ test('NAV-01 NAV-02 every top-level page is unique and switchable', async () => 
 test('LOGS-01 shows Action Gateway audit details and filters by date', async () => {
   const fixture = await launchTestApp({ now: Date.parse('2026-09-12T10:00:00+08:00') })
   try {
-    await fixture.page.getByRole('navigation', { name: '一级导航' }).getByRole('button', { name: '设置' }).click()
+    await fixture.page
+      .getByRole('navigation', { name: '一级导航' })
+      .getByRole('button', { name: '设置' })
+      .click()
     await fixture.page.getByRole('button', { name: '发送日志' }).click()
     await expect(fixture.page.getByRole('heading', { name: '日志', exact: true })).toBeVisible()
-    await expect(
-      fixture.page.locator('article').filter({ hasText: '产品测试群' })
-    ).toBeVisible()
+    await expect(fixture.page.locator('article').filter({ hasText: '产品测试群' })).toBeVisible()
     await fixture.page.getByText('查看详情').first().click()
     await expect(fixture.page.getByText('fixture-execution', { exact: true })).toBeVisible()
     await expect(fixture.page.getByText(/自动化 · 定时日报/)).toBeVisible()
@@ -443,24 +442,15 @@ test('CHAT-02 personal WeChat send dialog is keyboard-safe and fits the viewport
   }
 })
 
-test('GUIDE-01 first-use welcome is keyboard-safe and fits the viewport', async () => {
+test('GUIDE-01 first-use welcome is not offered', async () => {
   const fixture = await launchTestApp()
   const pageErrors: Error[] = []
   fixture.page.on('pageerror', (error) => pageErrors.push(error))
   try {
-    const guideButton = fixture.page.getByRole('button', { name: '新手引导' })
-    await guideButton.click()
-    const dialog = fixture.page.getByRole('dialog', { name: '开始探索你的微信' })
-    await expect(dialog).toBeVisible()
-    await expect(dialog.getByRole('button', { name: /试试 AI 群聊日报/ })).toBeVisible()
-    expect(
-      await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
-    ).toBe(true)
+    await expect(fixture.page.getByRole('navigation', { name: '一级导航' })).toBeVisible()
+    await expectNoFirstUseWelcome(fixture.page)
+    await expect(fixture.page.getByRole('button', { name: '日报' })).toHaveCount(0)
     expect(pageErrors).toEqual([])
-
-    await fixture.page.keyboard.press('Escape')
-    await expect(dialog).toHaveCount(0)
-    await expect(guideButton).toBeFocused()
   } finally {
     await fixture.close()
   }
@@ -984,7 +974,7 @@ test('LAYOUT-01 core workspaces fit the default desktop window without page erro
   fixture.page.on('pageerror', (error) => pageErrors.push(error))
   try {
     const navigation = fixture.page.getByRole('navigation', { name: '一级导航' })
-    for (const pageName of ['档案', '问问微信', '日报', '导出', 'API', '设置']) {
+    for (const pageName of ['档案', '问问微信', '导出', 'API', '设置']) {
       await navigation.getByRole('button', { name: pageName }).click()
       await expect(fixture.page.locator('main.app-shell-main')).not.toBeEmpty()
       expect(
@@ -1124,56 +1114,12 @@ test('ASK-02 AI failures are recoverable and do not break the archive', async ()
   }
 })
 
-test('REPORT-01 REPORT-02 generates a fixed report with non-empty local assets', async () => {
+test('REPORT-01 the daily report page is closed while shared export still writes files', async () => {
   const fixture = await launchTestApp()
   try {
-    await fixture.page.getByRole('button', { name: '日报' }).click()
-    await fixture.page.getByRole('button', { name: '开始生成日报' }).click()
-    await expect(fixture.page.getByRole('heading', { name: '生成群聊日报' })).toBeVisible()
-    const textModel = fixture.page.getByRole('combobox', { name: '文字总结模型' })
-    const visionModel = fixture.page.getByRole('combobox', { name: '图片理解模型' })
-    await expect(textModel).toContainText('固定响应模型')
-    await expect(visionModel).toContainText('固定图片识别模型')
-    await textModel.click()
-    await expect(fixture.page.getByRole('option')).toHaveCount(2)
-    await fixture.page.keyboard.press('Escape')
-    await expect(textModel).toBeFocused()
-    await visionModel.click()
-    await expect(fixture.page.getByRole('option')).toHaveCount(1)
-    await fixture.page.keyboard.press('Escape')
-    await expect(visionModel).toBeFocused()
-    await fixture.page.locator('.report-source-item').filter({ hasText: '产品测试群' }).click()
-    await fixture.page.getByRole('radio', { name: '近 7 天' }).click()
-    const generate = fixture.page.getByRole('button', { name: '开始生成日报' })
-    await expect(generate).toBeEnabled()
-    await generate.click()
-    await expect(fixture.page.getByAltText('产品测试群 群聊日报')).toBeVisible({
-      timeout: 15_000
-    })
-    await expect(fixture.page.getByText('文字模型')).toBeVisible()
-    await expect(fixture.page.getByText('固定响应模型')).toBeVisible()
-    await expect(fixture.page.getByText('图片模型')).toBeVisible()
-    await expect(fixture.page.getByText('固定图片识别模型')).toBeVisible()
-    await expect(fixture.page.getByRole('menuitem', { name: '生成微信卡片' })).toHaveCount(0)
-    const moreButton = fixture.page.getByRole('button', { name: '更多' })
-    await moreButton.click()
-    await fixture.page.getByRole('menuitem', { name: '生成微信卡片' }).click()
-    const shareDialog = fixture.page.getByRole('dialog', { name: '生成微信分享卡片' })
-    await expect(shareDialog).toBeVisible()
-    await expect(shareDialog.locator('input').first()).toHaveValue(/产品测试群日报/)
-    expect(
-      await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
-    ).toBe(true)
-    await fixture.page.keyboard.press('Escape')
-    await expect(shareDialog).toHaveCount(0)
-    await expect(moreButton).toBeFocused()
-
-    const reportTitle = fixture.page.getByRole('heading', { name: '产品测试群 群聊日报' })
-    await expect(reportTitle).toBeVisible()
-    expect((await reportTitle.boundingBox())?.width || 0).toBeGreaterThan(170)
-    await expect(fixture.page.getByRole('button', { name: '放大' })).toBeEnabled()
-    await fixture.page.getByRole('button', { name: '放大' }).click()
-
+    await expect(fixture.page.getByRole('navigation', { name: '一级导航' })).toBeVisible()
+    await expect(fixture.page.getByRole('button', { name: '日报' })).toHaveCount(0)
+    await expect(fixture.page.getByRole('button', { name: '生成 AI 日报' })).toHaveCount(0)
     const exported = await fixture.page.evaluate(async () =>
       window.api.exportGroupReport({
         report: {} as never,
@@ -1191,17 +1137,10 @@ test('REPORT-01 REPORT-02 generates a fixed report with non-empty local assets',
   }
 })
 
-test('REPORT-03 report failure is retryable and leaves other pages usable', async () => {
+test('REPORT-03 closing the report page leaves the archive usable', async () => {
   const fixture = await launchTestApp({ aiFailure: '401' })
   try {
-    await fixture.page.getByRole('button', { name: '日报' }).click()
-    await fixture.page.getByRole('button', { name: '开始生成日报' }).click()
-    await fixture.page.locator('.report-source-item').filter({ hasText: '产品测试群' }).click()
-    await fixture.page.getByRole('radio', { name: '近 7 天' }).click()
-    await fixture.page.getByRole('button', { name: '开始生成日报' }).click()
-    await expect(fixture.page.getByText(/本地假服务错误 401/).first()).toBeVisible()
-    await expect(fixture.page.getByRole('button', { name: '使用所选模型重新生成' })).toBeEnabled()
-    await expect(fixture.page.getByText(/从第三步继续/)).toBeVisible()
+    await expect(fixture.page.getByRole('button', { name: '日报' })).toHaveCount(0)
     await fixture.page.getByRole('button', { name: '档案' }).click()
     await expect(fixture.page.locator('main.app-shell-main[aria-label="档案"]')).toBeVisible()
     await expect(

@@ -13,6 +13,10 @@ import {
   type AutomationStatusSummary,
   type ScheduledRuleRunOutcome
 } from '../../shared/automation'
+import {
+  DAILY_REPORT_DISABLED_MESSAGE,
+  DAILY_REPORT_EXECUTION_ENABLED
+} from '../../shared/daily-report-feature'
 import type { GroupMemberExitedEvent } from '../../shared/group-exit-event'
 import type { PersonalWechatSendCapability } from '../../shared/personal-wechat'
 import type { Wcdb4Client } from '../wcdb4-client'
@@ -155,6 +159,8 @@ export interface AutomationServiceDependencies {
   now?: () => number
   /** gate 表容量上限。默认 `GATE_MAX_ENTRIES`；单测用小值来触发清理路径。 */
   gateMaxEntries?: number
+  /** 测试可显式打开。产品默认关闭 daily_report 消息和 scheduled_report 执行，且不改规则文件。 */
+  dailyReportExecutionEnabled?: boolean
 }
 
 interface ClaimEntry {
@@ -168,6 +174,7 @@ export class AutomationService {
   private readonly getCapability: () => Promise<PersonalWechatSendCapability>
   private readonly isListening: () => boolean
   private readonly now: () => number
+  private readonly dailyReportExecutionEnabled: boolean
 
   /** `ruleId:sessionId:localId` → 登记时间。 */
   private readonly claims = new Map<string, ClaimEntry>()
@@ -215,6 +222,8 @@ export class AutomationService {
     this.isListening = dependencies.isListening ?? (() => true)
     this.now = dependencies.now ?? (() => Date.now())
     this.gateMaxEntries = dependencies.gateMaxEntries ?? GATE_MAX_ENTRIES
+    this.dailyReportExecutionEnabled =
+      dependencies.dailyReportExecutionEnabled ?? DAILY_REPORT_EXECUTION_ENABLED
   }
 
   /**
@@ -242,6 +251,7 @@ export class AutomationService {
     }
 
     for (const rule of rules) {
+      if (rule.ruleType === 'daily_report' && !this.dailyReportExecutionEnabled) continue
       // ① Gate 检查放在 TriggerMatcher **之前**（纯读，无副作用）。
       //
       // Automation rule conversation gate:
@@ -483,6 +493,13 @@ export class AutomationService {
     ruleId: string,
     options: { trigger: 'schedule' | 'manual'; scheduledSlot?: string }
   ): Promise<ScheduledRuleRunOutcome> {
+    if (!this.dailyReportExecutionEnabled) {
+      return {
+        executed: false,
+        reason: 'feature_disabled',
+        errorSummary: DAILY_REPORT_DISABLED_MESSAGE
+      }
+    }
     const key = String(ruleId || '').trim()
     if (!key) return { executed: false, reason: 'missing_rule' }
 

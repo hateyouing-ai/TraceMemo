@@ -6,26 +6,11 @@ import { ApiWorkspace } from './features/api-center/ApiWorkspace'
 import { SettingsWorkspace } from './features/settings/SettingsWorkspace'
 import { AgentHubWorkspace } from './features/agent-hub/AgentHubWorkspace'
 import type { SettingsCategoryId } from './features/settings/model/types'
-import type {
-  AIProviderSummary,
-  AIRuntimeModelConfig,
-  ReportModelChoice
-} from '../../shared/ai-provider'
+import type { AIRuntimeModelConfig } from '../../shared/ai-provider'
+import { CUSTOM_EDITION_LABEL } from '../../shared/custom-edition'
 import { AppPage } from './components/layout/navigation'
-import { AiReportWorkspace } from './components/reports/AiReportWorkspace'
-import { ReportHistorySidebar } from './components/reports/ReportHistorySidebar'
-import { ReportInfoPanel } from './components/reports/ReportInfoPanel'
-import { ReportSourceSidebar } from './components/reports/ReportSourceSidebar'
-import { ReportTaskStatusPanel } from './components/reports/ReportTaskStatusPanel'
-import { ReportViewer } from './components/reports/ReportViewer'
-import { ReportTemplateMarketWorkspace } from './components/reports/ReportTemplateMarketWorkspace'
-import { contactDisplayName } from './components/reports/types'
-import type { GeneratedReportRecord, ReportWorkspaceView } from './components/reports/types'
-import { AiModelConfig, useGroupReportGeneration } from './hooks/useGroupReportGeneration'
-import { SummaryDateRange, SummaryMessageType } from './utils/group-report'
 import { Contact, Message } from '../../shared/types'
 import { DatabaseConnectionMode, DatabaseConnectionPage } from './components/DatabaseConnectionPage'
-import { FirstUseWelcome } from './components/FirstUseWelcome'
 import { ExportWorkspace } from './components/export/ExportWorkspace'
 import { AISearchWorkspace } from './components/search/AISearchWorkspace'
 import type { EvidenceItem } from './components/search/searchTypes'
@@ -39,13 +24,17 @@ import {
 } from './utils/message-pages'
 import { isRelevantMessageMonitorEvent, parseWcdbMonitorEvent } from './utils/message-monitor'
 import { enrichQuotedMessages } from './utils/quoted-messages'
-import type { ReportTemplateSelectionId } from '../../shared/report-templates'
-import { switchGeneratedReportTemplate } from './utils/report-template-switch'
 import { runtimePlatform } from './utils/runtime-environment'
-import { Button, useToast } from './components/ui'
+import { useToast } from './components/ui'
 import { AppUpdatePrompt } from './features/app-update/AppUpdatePrompt'
-import { GroupExitMonitorWorkspace, type GroupExitMonitorOpenViewRequest } from './features/group-exit-monitor/GroupExitMonitorWorkspace'
-import { AutomationWorkspace, type AutomationOpenRuleRequest } from './features/automation/AutomationWorkspace'
+import {
+  GroupExitMonitorWorkspace,
+  type GroupExitMonitorOpenViewRequest
+} from './features/group-exit-monitor/GroupExitMonitorWorkspace'
+import {
+  AutomationWorkspace,
+  type AutomationOpenRuleRequest
+} from './features/automation/AutomationWorkspace'
 import { selectContactAvatarRefreshUsernames } from './utils/contact-avatar'
 import {
   buildContactSearchIndex,
@@ -93,57 +82,12 @@ interface ContactLoadOptions {
 }
 
 const MAC_KEY_FAQ_URL = 'https://github.com/Wxw-Gu/TraceMemo/blob/main/docs/mac-disable-sip.md'
-const FIRST_USE_WELCOME_SEEN_KEY = 'wxe_first_use_welcome_seen'
 const MESSAGE_MONITOR_DEBOUNCE_MS = 350
 const INITIAL_MESSAGE_COUNT = 20
 const MESSAGE_PAGE_SIZE = 100
 const MESSAGE_PREFETCH_COUNT = INITIAL_MESSAGE_COUNT + MESSAGE_PAGE_SIZE
 const EXPORT_PREVIEW_LIMIT = 20
-const REPORT_TEXT_MODEL_STORAGE_KEY = 'group_report_text_model'
-const REPORT_VISION_MODEL_STORAGE_KEY = 'group_report_vision_model'
 
-const reportModelKey = (model: { providerId?: string; model: string }): string =>
-  model.providerId && model.model ? `${model.providerId}::${model.model}` : ''
-
-const reportProviderConfigured = (provider: AIProviderSummary): boolean =>
-  Boolean(provider.hasApiKey || provider.type === 'ollama' || provider.auth.type === 'none')
-
-const reportModelChoices = (
-  providers: AIProviderSummary[],
-  capability: 'chat' | 'vision'
-): ReportModelChoice[] =>
-  providers.flatMap((provider) => {
-    if (!reportProviderConfigured(provider)) return []
-    return provider.models
-      .filter((model) =>
-        capability === 'chat'
-          ? model.capabilities.chat
-          : model.capabilities.vision || model.capabilities.ocr
-      )
-      .map((model) => ({
-        providerId: provider.id,
-        providerName: provider.name,
-        model: model.id,
-        modelName: model.name || model.id,
-        configured: true as const,
-        status: provider.status,
-        timeoutMs: provider.advanced.timeoutMs
-      }))
-  })
-
-const selectReportModel = (
-  choices: ReportModelChoice[],
-  storageKey: string,
-  fallback: { providerId?: string; model: string }
-): ReportModelChoice | undefined => {
-  const savedKey = localStorage.getItem(storageKey) || ''
-  const fallbackKey = reportModelKey(fallback)
-  return (
-    choices.find((choice) => reportModelKey(choice) === savedKey) ||
-    choices.find((choice) => reportModelKey(choice) === fallbackKey) ||
-    choices[0]
-  )
-}
 const areMessagesEquivalent = (left: Message[], right: Message[]): boolean => {
   if (left === right) return true
   if (left.length !== right.length) return false
@@ -277,33 +221,14 @@ function App(): React.ReactElement {
    */
   const [archiveJumpMessageId, setArchiveJumpMessageId] = useState<string | null>(null)
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategoryId>('account-database')
-  const [reportSourceContact, setReportSourceContact] = useState<Contact | null>(null)
-  const [reportWorkspaceView, setReportWorkspaceView] = useState<ReportWorkspaceView>('result')
-  const [reportSection, setReportSection] = useState<'today' | 'market'>('today')
-  const [generatedReports, setGeneratedReports] = useState<GeneratedReportRecord[]>([])
-  const [selectedReportId, setSelectedReportId] = useState<string | null>(null)
-  const [latestGeneratedReportId, setLatestGeneratedReportId] = useState<string | null>(null)
-  const [isSavingGeneratedReport, setIsSavingGeneratedReport] = useState(false)
   const [reportNotice, setReportNotice] = useState('')
-  const [summaryDateRange, setSummaryDateRange] = useState<SummaryDateRange>('today')
-  const [summaryMessageTypes, setSummaryMessageTypes] = useState<SummaryMessageType[]>(['text'])
-  const [aiModelConfig, setAiModelConfig] = useState<AiModelConfig>({
+  const [aiModelConfig, setAiModelConfig] = useState<AIRuntimeModelConfig>({
     providerName: '尚未配置',
     model: '',
     modelName: '尚未选择模型',
     configured: false,
     status: 'untested'
   })
-  const [reportTextModelConfig, setReportTextModelConfig] = useState<AiModelConfig>({
-    providerName: '尚未配置',
-    model: '',
-    modelName: '尚未选择模型',
-    configured: false,
-    status: 'untested'
-  })
-  const [aiVisionModelConfig, setAiVisionModelConfig] = useState<ReportModelChoice>()
-  const [reportTextModelOptions, setReportTextModelOptions] = useState<ReportModelChoice[]>([])
-  const [reportVisionModelOptions, setReportVisionModelOptions] = useState<ReportModelChoice[]>([])
   const [selfInfo, setSelfInfo] = useState<SelfInfo | null>(null)
   const [isNativeMonitorActive, setIsNativeMonitorActive] = useState(false)
   const [exportTasks, setExportTasks] = useState<ExportTaskRecord[]>(() => {
@@ -342,7 +267,6 @@ function App(): React.ReactElement {
   const [bootState, setBootState] = useState<'loading' | 'connecting' | 'login'>('loading')
   const [autoConnectSource, setAutoConnectSource] = useState<'env' | 'saved' | null>(null)
   const [startupProgress, setStartupProgress] = useState<StartupProgress | null>(null)
-  const [showFirstUseWelcome, setShowFirstUseWelcome] = useState(false)
   const [appearanceSettings, setAppearanceSettings] = React.useState<{
     theme: 'system' | 'light' | 'dark'
     compactMode: boolean
@@ -361,6 +285,9 @@ function App(): React.ReactElement {
   const messagesRef = React.useRef<Message[]>([])
   const messagePrefetchRef = React.useRef<Promise<void> | null>(null)
   messagesRef.current = messages
+  React.useEffect(() => {
+    document.title = `TraceMemo ${CUSTOM_EDITION_LABEL}`
+  }, [])
   React.useEffect(() => {
     if (!reportNotice) return
     toast({ description: reportNotice, duration: 3200 })
@@ -431,25 +358,8 @@ function App(): React.ReactElement {
             localStorage.removeItem('ai_model')
           }
         }
-        const [runtime, visionRuntime, providerList] = await Promise.all([
-          window.api.getAIRuntimeConfig(),
-          window.api.getAIVisionRuntimeConfig(),
-          window.api.listAIProviders()
-        ])
-        const providers = providerList.success ? providerList.providers : []
-        const textChoices = reportModelChoices(providers, 'chat')
-        const visionChoices = reportModelChoices(providers, 'vision')
-        const selectedText = selectReportModel(textChoices, REPORT_TEXT_MODEL_STORAGE_KEY, runtime)
-        const selectedVision = selectReportModel(
-          visionChoices,
-          REPORT_VISION_MODEL_STORAGE_KEY,
-          visionRuntime
-        )
-        setReportTextModelOptions(textChoices)
-        setReportVisionModelOptions(visionChoices)
+        const runtime = await window.api.getAIRuntimeConfig()
         setAiModelConfig(runtime)
-        setReportTextModelConfig(selectedText || runtime)
-        setAiVisionModelConfig(selectedVision)
       } catch (error) {
         console.warn('[AI Provider] 配置加载失败:', error)
       }
@@ -463,15 +373,6 @@ function App(): React.ReactElement {
   const loadContactsRef = React.useRef<((options?: ContactLoadOptions) => Promise<void>) | null>(
     null
   )
-  const reportGeneration = useGroupReportGeneration({
-    sourceContact: reportSourceContact,
-    summaryDateRange,
-    summaryMessageTypes,
-    modelConfig: reportTextModelConfig,
-    visionModelConfig: aiVisionModelConfig
-  })
-  const reportHistoryRequestRef = React.useRef(0)
-  const lastCapturedReportKeyRef = React.useRef('')
 
   React.useEffect(() => {
     const unsubscribe = window.api.onExportProgress((progress: ExportJobProgress) => {
@@ -563,26 +464,6 @@ function App(): React.ReactElement {
       )
     )
   }
-
-  const loadGeneratedReports = React.useCallback(async (): Promise<void> => {
-    const requestId = ++reportHistoryRequestRef.current
-    try {
-      const result = await window.api.listGeneratedReports()
-      if (requestId !== reportHistoryRequestRef.current) return
-      if (!result.success) {
-        setReportNotice(result.error || '日报历史加载失败')
-        return
-      }
-      const reports = result.reports || []
-      setGeneratedReports(reports)
-      setSelectedReportId((current) =>
-        current && reports.some((report) => report.id === current) ? current : null
-      )
-    } catch (error) {
-      if (requestId !== reportHistoryRequestRef.current) return
-      setReportNotice(error instanceof Error ? error.message : String(error))
-    }
-  }, [])
 
   const waitForPaint = (): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, 80))
 
@@ -842,20 +723,6 @@ function App(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  React.useEffect(() => {
-    if (!isAuthenticated) return
-    void loadGeneratedReports()
-  }, [isAuthenticated, loadGeneratedReports])
-
-  React.useEffect(() => {
-    if (!isAuthenticated || activePage !== 'report') return
-    void loadGeneratedReports()
-    const refreshTimer = window.setInterval(() => {
-      void loadGeneratedReports()
-    }, 15_000)
-    return () => window.clearInterval(refreshTimer)
-  }, [activePage, isAuthenticated, loadGeneratedReports, reportSection, reportWorkspaceView])
-
   const handleLogin = async (keyInput?: string, accountRootInput?: string): Promise<void> => {
     const keyToUse = keyInput || dbKey
     let accountRoot = accountRootInput || selectedAccount?.accountRoot
@@ -959,7 +826,6 @@ function App(): React.ReactElement {
         })
         setIsDatabaseConnected(true)
         setBootState('login')
-        maybeShowFirstUseWelcome()
         window.setTimeout(() => {
           setStartupProgress(null)
         }, 500)
@@ -1221,7 +1087,6 @@ function App(): React.ReactElement {
     setFilteredContacts([])
     setContentFilter('')
     setSelfInfo(null)
-    setReportSourceContact(null)
     setExportTasks([])
     messageHistoryRef.current = []
     messagesRef.current = []
@@ -1608,21 +1473,10 @@ function App(): React.ReactElement {
     }
   }
 
-  const isGroupContact = (contact: Contact | null): boolean =>
-    Boolean(contact?.type === 'group' || contact?.m_nsUsrName?.endsWith('@chatroom'))
-
   const handlePageChange = (page: AppPage): void => {
     setActivePage(page)
     if (page === 'archive' && selectedContact) void handleSelectContact(selectedContact)
     if (page === 'settings') setSettingsCategory('account-database')
-    if (page === 'report' && isGroupContact(selectedContact) && !reportSourceContact) {
-      setReportSourceContact(selectedContact)
-    }
-    if (page === 'report') {
-      setReportWorkspaceView('result')
-      setSelectedReportId(null)
-      setReportSection('today')
-    }
   }
 
   const openSettings = (): void => {
@@ -1676,254 +1530,10 @@ function App(): React.ReactElement {
     setActivePage('automation')
   }
 
-  /**
-   * 「定时日报」已正式迁入自动化，日报页只保留「今日日报 | 社区模板市场」两个 Tab。
-   *
-   * 这里仍然留一个导航入口：用户是从日报页产生"要定时发日报"这个念头的，
-   * 不给路会显得功能被删了。它**不是**第三个 Tab，只是一句去处的说明。
-   */
-  const openScheduledReportAutomation = (): void => {
-    setAutomationOpenRuleRequest({ ruleType: 'scheduled_report', requestId: Date.now() })
-    setActivePage('automation')
-  }
-
   /** 「自动化 → 退群通知 → 管理监控群聊 / 查看群聊」：回到退群监控的管理群聊页。 */
   const openExitMonitorGroups = (): void => {
     setExitMonitorOpenViewRequest({ view: 'manage', requestId: Date.now() })
     setActivePage('exit-monitor')
-  }
-
-  const dismissFirstUseWelcome = (): void => {
-    try {
-      localStorage.setItem(FIRST_USE_WELCOME_SEEN_KEY, '1')
-    } catch {
-      // The welcome prompt is optional and should not interrupt normal use.
-    }
-    setShowFirstUseWelcome(false)
-  }
-
-  const maybeShowFirstUseWelcome = (): void => {
-    try {
-      if (localStorage.getItem(FIRST_USE_WELCOME_SEEN_KEY) === '1') return
-    } catch {
-      // If localStorage is unavailable, still show the one-time prompt for this session.
-    }
-    setShowFirstUseWelcome(true)
-  }
-
-  const openFirstUseSearch = (): void => {
-    dismissFirstUseWelcome()
-    setActivePage('search')
-  }
-
-  const openFirstUseReport = (): void => {
-    dismissFirstUseWelcome()
-    setReportWorkspaceView('configure')
-    setSelectedReportId(null)
-    setActivePage('report')
-  }
-
-  const openFirstUseAISettings = (): void => {
-    dismissFirstUseWelcome()
-    openModelSettings()
-  }
-
-  const openFirstUseGuide = (): void => {
-    setShowFirstUseWelcome(true)
-  }
-
-  const openReport = (reportId: string): void => {
-    setSelectedReportId(reportId)
-    setReportWorkspaceView('result')
-    setActivePage('report')
-  }
-
-  const handleOpenReportWorkspace = (): void => {
-    if (!selectedContact) {
-      setReportNotice('请先选择一个群聊')
-      return
-    }
-    if (!isGroupContact(selectedContact)) {
-      setReportNotice('AI 群聊日报仅支持群聊')
-      return
-    }
-    setReportNotice('')
-    setReportSourceContact(selectedContact)
-    setReportWorkspaceView('configure')
-    setActivePage('report')
-  }
-
-  const handleSelectReportSource = (contact: Contact): void => {
-    setReportSourceContact(contact)
-    if (selectedContact?.md5 !== contact.md5) {
-      void handleSelectContact(contact)
-    }
-  }
-
-  React.useEffect(() => {
-    if (
-      reportGeneration.phase !== 'success' ||
-      !reportSourceContact ||
-      !reportGeneration.generatedImage ||
-      !reportGeneration.reportPaths ||
-      !reportGeneration.reportSnapshot ||
-      !reportGeneration.reportMetadata
-    ) {
-      return
-    }
-
-    const recordKey = `${reportGeneration.reportPaths.pngPath}:${reportGeneration.reportPaths.htmlPath}`
-    if (lastCapturedReportKeyRef.current === recordKey) return
-    lastCapturedReportKeyRef.current = recordKey
-    setLatestGeneratedReportId(null)
-    setIsSavingGeneratedReport(true)
-    const reportSnapshot = reportGeneration.reportSnapshot
-    const reportMetadata = reportGeneration.reportMetadata
-
-    const saveReport = async (): Promise<void> => {
-      const result = await window.api.saveGeneratedReport({
-        contactId: reportSourceContact.md5,
-        contactName: contactDisplayName(reportSourceContact),
-        contactAvatar: reportSourceContact.avatar || undefined,
-        source: 'manual',
-        dateRange:
-          summaryDateRange === 'yesterday'
-            ? '昨日'
-            : summaryDateRange === '7days'
-              ? '近 7 天'
-              : '今日',
-        reportDate: reportMetadata.reportDate,
-        messageCount: reportGeneration.reportMessages.length,
-        generatedAt: new Date().toISOString(),
-        generatedImage: reportGeneration.generatedImage || undefined,
-        htmlPath: reportGeneration.reportPaths?.htmlPath,
-        pngPath: reportGeneration.reportPaths?.pngPath,
-        duration: reportGeneration.generationMetadata.durationMs,
-        textModelName:
-          reportGeneration.generationMetadata.modelName || reportTextModelConfig.modelName,
-        imageModelName: aiVisionModelConfig?.modelName || aiVisionModelConfig?.model,
-        modelName: reportGeneration.generationMetadata.modelName || reportTextModelConfig.modelName,
-        tokenUsage: reportGeneration.generationMetadata.tokenUsage,
-        generationLogs: reportGeneration.generationMetadata.generationLogs,
-        reportSnapshot,
-        reportMetadata,
-        templateId: reportGeneration.templateId
-      })
-
-      if (!result.success || !result.record) {
-        setIsSavingGeneratedReport(false)
-        setReportNotice(result.error || '日报保存失败')
-        return
-      }
-
-      setGeneratedReports((current) => [
-        result.record as GeneratedReportRecord,
-        ...current.filter((report) => report.id !== result.record?.id)
-      ])
-      setLatestGeneratedReportId(result.record.id)
-      setIsSavingGeneratedReport(false)
-      openReport(result.record.id)
-    }
-
-    void saveReport()
-  }, [
-    aiVisionModelConfig?.model,
-    aiVisionModelConfig?.modelName,
-    reportTextModelConfig.model,
-    reportTextModelConfig.modelName,
-    reportGeneration.generatedImage,
-    reportGeneration.generationMetadata,
-    reportGeneration.phase,
-    reportGeneration.reportMessages.length,
-    reportGeneration.reportMetadata,
-    reportGeneration.reportPaths,
-    reportGeneration.reportSnapshot,
-    reportGeneration.templateId,
-    reportSourceContact,
-    summaryDateRange
-  ])
-
-  const selectedReport = generatedReports.find((report) => report.id === selectedReportId) || null
-  const selectedReportContact = selectedReport
-    ? contacts.find((contact) => contact.md5 === selectedReport.contactId) || null
-    : null
-
-  const openReportResult = (): void => {
-    if (isSavingGeneratedReport) {
-      setReportNotice('日报正在保存，请稍候')
-      return
-    }
-    const targetReportId = latestGeneratedReportId || selectedReportId
-    if (targetReportId) {
-      openReport(targetReportId)
-      return
-    }
-    setReportWorkspaceView('result')
-  }
-
-  const openReportConfigure = (): void => {
-    setReportWorkspaceView('configure')
-  }
-
-  const handleRegenerateReport = (): void => {
-    if (selectedReport) {
-      const source = contacts.find((contact) => contact.md5 === selectedReport.contactId)
-      if (source) setReportSourceContact(source)
-    }
-    setReportWorkspaceView('configure')
-  }
-
-  const handleCopyReportImage = async (
-    report: GeneratedReportRecord
-  ): Promise<{ success: boolean; error?: string }> => {
-    if (!report.generatedImage) return { success: false, error: '没有可复制的日报图片' }
-    return window.api.copyImage(report.generatedImage)
-  }
-
-  const handleRevealReport = async (
-    report: GeneratedReportRecord
-  ): Promise<{ success: boolean; error?: string }> => {
-    const filePath = report.pngPath || report.htmlPath
-    if (!filePath) return { success: false, error: '当前报告缺少文件路径' }
-    return window.api.revealGroupReport(filePath)
-  }
-
-  const handleSwitchReportTemplate = async (
-    report: GeneratedReportRecord,
-    templateId: ReportTemplateSelectionId
-  ): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const updated = await withTimeout(
-        switchGeneratedReportTemplate(report, templateId, window.api),
-        120_000,
-        '模板切换超时，请稍后重试'
-      )
-      if (!updated.success || !updated.record) {
-        return { success: false, error: updated.error || '日报模板更新失败' }
-      }
-
-      setGeneratedReports((current) =>
-        current.map((item) => (item.id === report.id ? updated.record! : item))
-      )
-      reportGeneration.setTemplateId(templateId)
-      return { success: true }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  }
-
-  const handleDeleteReport = async (
-    reportId: string
-  ): Promise<{ success: boolean; error?: string }> => {
-    const result = await window.api.deleteGeneratedReport(reportId)
-    if (!result.success) return { success: false, error: result.error || '删除日报失败' }
-
-    setGeneratedReports((current) => current.filter((report) => report.id !== reportId))
-    if (selectedReportId === reportId) {
-      setSelectedReportId(null)
-    }
-    if (latestGeneratedReportId === reportId) setLatestGeneratedReportId(null)
-    return { success: true }
   }
 
   const renderArchiveWorkspace = (): React.ReactElement => (
@@ -1953,159 +1563,12 @@ function App(): React.ReactElement {
         onRefresh={() => selectedContact && handleSelectContact(selectedContact, true)}
         onReloadAvatars={handleReloadCurrentAvatars}
         onLoadOlderMessages={handleLoadOlderMessages}
-        onCreateGroupReport={handleOpenReportWorkspace}
         onOpenTextToSpeechSettings={openTextToSpeechSettings}
         onOpenPersonalWechatSettings={openWechatSendSettings}
         onOpenLocalIndexSettings={openLocalIndexSettings}
-        isAiLoading={reportGeneration.isGenerating}
         jumpToTime={archiveJumpTime}
         jumpToMessageId={archiveJumpMessageId}
       />
-    </div>
-  )
-
-  const renderReportWorkspace = (): React.ReactElement => (
-    <div className="report-workspace-shell">
-      <div className="report-workspace-tabs" role="tablist" aria-label="日报类型">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={reportSection === 'today'}
-          className={reportSection === 'today' ? 'active' : ''}
-          onClick={() => setReportSection('today')}
-        >
-          今日日报
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={reportSection === 'market'}
-          className={reportSection === 'market' ? 'active' : ''}
-          onClick={() => setReportSection('market')}
-        >
-          社区模板市场
-        </button>
-      </div>
-      {/*
-        「定时日报已并入自动化」的指引条。
-
-        这里以前是裸 `<p>` + 裸 `<button>`，并且挂了 `.report-workspace-hint` /
-        `.report-workspace-hint-link` 两个**样式表里根本不存在**的类 ——
-        于是就成了一条没样式的文字 + 一个长得不像系统里任何按钮的按钮。
-        现在补上真实样式，按钮统一走 UI 组件库。
-      */}
-      <div className="report-workspace-hint">
-        <span>需要「定时日报」？它已经并入「自动化」，可以按时间自动生成并发送日报。</span>
-        <Button variant="link" size="sm" onClick={openScheduledReportAutomation}>
-          去自动化配置 →
-        </Button>
-      </div>
-      <div className="report-workspace-body">
-        {reportSection === 'market' ? (
-          <ReportTemplateMarketWorkspace
-            value={reportGeneration.templateId}
-            onChange={reportGeneration.setTemplateId}
-          />
-        ) : reportWorkspaceView === 'result' ? (
-          <div className="report-center-page">
-            <ReportHistorySidebar
-              reports={generatedReports}
-              contacts={contacts}
-              selectedReportId={selectedReportId}
-              selfInfo={selfInfo}
-              dbReady={isDatabaseConnected}
-              dbConnecting={isDatabaseConnecting}
-              onSelectReport={openReport}
-              onCreateReport={openReportConfigure}
-              onDeleteReport={handleDeleteReport}
-              onOpenSettings={openSettings}
-            />
-            <ReportViewer
-              report={selectedReport}
-              hasReports={generatedReports.length > 0}
-              onBackToConfigure={openReportConfigure}
-              onRegenerate={handleRegenerateReport}
-              onCopyImage={handleCopyReportImage}
-              onReveal={handleRevealReport}
-              onSwitchTemplate={handleSwitchReportTemplate}
-              sendTarget={selectedReportContact}
-              onOpenPersonalWechatSettings={openWechatSendSettings}
-            />
-            <ReportInfoPanel report={selectedReport} onReveal={handleRevealReport} />
-          </div>
-        ) : (
-          <div className="report-page">
-            <ReportSourceSidebar
-              contacts={contacts}
-              selectedContact={reportSourceContact}
-              selfInfo={selfInfo}
-              dbReady={isDatabaseConnected}
-              dbConnecting={isDatabaseConnecting}
-              onSelectContact={handleSelectReportSource}
-              onOpenSettings={openSettings}
-            />
-            <AiReportWorkspace
-              sourceContact={reportSourceContact}
-              summaryDateRange={summaryDateRange}
-              summaryMessageTypes={summaryMessageTypes}
-              modelConfig={reportTextModelConfig}
-              visionModelConfig={aiVisionModelConfig}
-              textModelOptions={reportTextModelOptions}
-              visionModelOptions={reportVisionModelOptions}
-              rangeMessageCount={reportGeneration.rangeMessages.length}
-              reportMessageCount={reportGeneration.reportMessages.length}
-              messageTypeCounts={reportGeneration.messageTypeCounts}
-              rangeState={reportGeneration.rangeState}
-              phase={reportGeneration.phase}
-              error={reportGeneration.error}
-              generatedImage={reportGeneration.generatedImage}
-              reportPaths={reportGeneration.reportPaths}
-              isGenerating={reportGeneration.isGenerating}
-              onSummaryDateRangeChange={setSummaryDateRange}
-              onSummaryMessageTypesChange={setSummaryMessageTypes}
-              onOpenModelSettings={openModelSettings}
-              onTextModelChange={(model) => {
-                localStorage.setItem(REPORT_TEXT_MODEL_STORAGE_KEY, reportModelKey(model))
-                setReportTextModelConfig(model)
-              }}
-              onVisionModelChange={(model) => {
-                localStorage.setItem(REPORT_VISION_MODEL_STORAGE_KEY, reportModelKey(model))
-                setAiVisionModelConfig(model)
-              }}
-              onGenerate={() => {
-                reportGeneration.resetGenerationStatus()
-                void reportGeneration.generate()
-              }}
-              onCloseResult={reportGeneration.closeResult}
-              onCopyImage={reportGeneration.copyImage}
-              onRevealReport={reportGeneration.revealReport}
-              onViewResult={openReportResult}
-              hasReportResult={generatedReports.length > 0}
-              templateId={reportGeneration.templateId}
-              onTemplateIdChange={reportGeneration.setTemplateId}
-              memberNamePreference={reportGeneration.memberNamePreference}
-              onMemberNamePreferenceChange={reportGeneration.setMemberNamePreference}
-              reportTimeoutSeconds={reportGeneration.reportTimeoutSeconds}
-              onReportTimeoutSecondsChange={reportGeneration.setReportTimeoutSeconds}
-            />
-            <ReportTaskStatusPanel
-              phase={reportGeneration.phase}
-              error={reportGeneration.error}
-              voiceTranscriptionProgress={reportGeneration.voiceTranscriptionProgress}
-              voiceTranscriptionEnabled={summaryMessageTypes.includes('voice')}
-              preparationProgress={reportGeneration.preparationProgress}
-              imageInsightSummary={reportGeneration.imageInsightSummary}
-              canRetryModelStep={reportGeneration.canRetryModelStep}
-              currentModel={reportTextModelConfig}
-              onRetry={(model) => void reportGeneration.retry(model)}
-              onContinueAfterImageFailures={() =>
-                void reportGeneration.continueAfterImageFailures()
-              }
-              onCancelAfterImageFailures={reportGeneration.cancelAfterImageFailures}
-            />
-          </div>
-        )}
-      </div>
     </div>
   )
 
@@ -2113,8 +1576,6 @@ function App(): React.ReactElement {
     switch (activePage) {
       case 'archive':
         return renderArchiveWorkspace()
-      case 'report':
-        return renderReportWorkspace()
       case 'exit-monitor':
         return (
           <GroupExitMonitorWorkspace
@@ -2164,33 +1625,6 @@ function App(): React.ReactElement {
             onReturnToLogin={handleReturnToLogin}
             onAIRuntimeChange={(config: AIRuntimeModelConfig) => {
               setAiModelConfig(config)
-              void Promise.all([
-                window.api.getAIVisionRuntimeConfig(),
-                window.api.listAIProviders()
-              ])
-                .then(([visionRuntime, providerList]) => {
-                  const providers = providerList.success ? providerList.providers : []
-                  const textChoices = reportModelChoices(providers, 'chat')
-                  const visionChoices = reportModelChoices(providers, 'vision')
-                  setReportTextModelOptions(textChoices)
-                  setReportVisionModelOptions(visionChoices)
-                  setReportTextModelConfig(
-                    (current) =>
-                      selectReportModel(
-                        textChoices,
-                        REPORT_TEXT_MODEL_STORAGE_KEY,
-                        current.configured ? current : config
-                      ) || config
-                  )
-                  setAiVisionModelConfig((current) =>
-                    selectReportModel(
-                      visionChoices,
-                      REPORT_VISION_MODEL_STORAGE_KEY,
-                      current || visionRuntime
-                    )
-                  )
-                })
-                .catch(() => undefined)
             }}
             onNotice={setReportNotice}
             onOpenSettings={openSettings}
@@ -2398,19 +1832,10 @@ function App(): React.ReactElement {
       dbConnecting={isDatabaseConnecting}
       onPageChange={handlePageChange}
       onOpenSettings={openSettings}
-      onOpenGuide={openFirstUseGuide}
       appearanceTheme={appearanceSettings.theme}
       compactMode={appearanceSettings.compactMode}
     >
       <AppUpdatePrompt onDownloadStart={openUpdateSettings} onNotice={setReportNotice} />
-      {showFirstUseWelcome && (
-        <FirstUseWelcome
-          onDismiss={dismissFirstUseWelcome}
-          onOpenSearch={openFirstUseSearch}
-          onOpenReport={openFirstUseReport}
-          onOpenAISettings={openFirstUseAISettings}
-        />
-      )}
       {renderCurrentWorkspace()}
     </AppShell>
   )

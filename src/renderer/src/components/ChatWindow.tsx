@@ -20,12 +20,10 @@ interface ChatWindowProps {
   onRefresh?: () => void
   onReloadAvatars?: () => Promise<void>
   onLoadOlderMessages?: () => Promise<void>
-  onCreateGroupReport?: () => void
   onOpenTextToSpeechSettings?: () => void
   onOpenPersonalWechatSettings?: () => void
   /** 跳到「设置 · 本地索引」（群统计发现索引没追平时用）。 */
   onOpenLocalIndexSettings?: () => void
-  isAiLoading?: boolean
   jumpToTime?: number | null
   /** 精确跳转目标（消息 id）。与 jumpToTime 取或：任一存在就说明"这是一次跳转"。 */
   jumpToMessageId?: string | null
@@ -41,11 +39,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   onRefresh,
   onReloadAvatars,
   onLoadOlderMessages,
-  onCreateGroupReport,
   onOpenTextToSpeechSettings,
   onOpenPersonalWechatSettings,
   onOpenLocalIndexSettings,
-  isAiLoading = false,
   jumpToTime,
   jumpToMessageId
 }) => {
@@ -177,11 +173,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         loadedCount={messages.length}
         filteredCount={filteredMessages.length}
         contentFilter={contentFilter || ''}
-        isAiLoading={isAiLoading}
         onContentFilterChange={onContentFilterChange || (() => undefined)}
         onRefresh={onRefresh}
         onTestSend={() => void handleOpenPersonalWechatSend()}
-        onOpenAiSettings={onCreateGroupReport || (() => undefined)}
         onOpenLocalIndexSettings={onOpenLocalIndexSettings}
       />
       <DataTrustBar messageCount={messages.length} />

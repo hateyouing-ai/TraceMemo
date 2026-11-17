@@ -246,7 +246,8 @@ function buildChain(
     executionLog: log,
     runner,
     getCapability: async () => capability,
-    now: () => AFTER_SLOT_MS
+    now: () => AFTER_SLOT_MS,
+    dailyReportExecutionEnabled: true
   })
 
   const ruleId = store.createRule(
@@ -263,7 +264,8 @@ function buildChain(
     listRules: () => store.listRules(),
     listExecutions: (input) => log.list(input),
     isDatabaseReady: () => true,
-    now: () => AFTER_SLOT
+    now: () => AFTER_SLOT,
+    reportExecutionEnabled: true
   })
 
   return { scheduler, service, store, log, sends, ruleId }
@@ -554,7 +556,8 @@ describe('scheduled report end-to-end chain', () => {
       listRules: () => chain.store.listRules(),
       listExecutions: (input) => chain.log.list(input),
       isDatabaseReady: () => true,
-      now: () => AFTER_SLOT
+      now: () => AFTER_SLOT,
+      reportExecutionEnabled: true
     })
     await restarted.tick(AFTER_SLOT)
     await restarted.settle()
@@ -598,7 +601,8 @@ describe('scheduled report end-to-end chain', () => {
         executionLog: log,
         runner,
         getCapability: async () => readyCapability(),
-        now: () => AFTER_SLOT_MS
+        now: () => AFTER_SLOT_MS,
+        dailyReportExecutionEnabled: true
       }
     )
     const ruleId = store.createRule(scheduledDraft('source_chat')).id
@@ -616,7 +620,8 @@ describe('scheduled report end-to-end chain', () => {
       getNotificationRecipient: () => SELF,
       getAgentHubStatus: () => ({ hub: 'online', connector: 'online', updatedAt: 0 }),
       isDatabaseReady: () => true,
-      now: () => AFTER_SLOT
+      now: () => AFTER_SLOT,
+      reportExecutionEnabled: true
     })
 
     // 开启异常通知会先试发一条，把它排掉，后面只看执行失败那一条。

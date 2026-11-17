@@ -11,7 +11,6 @@ import type {
 } from '../../shared/agent-hub'
 import type { WechatSendErrorCode, WechatSendResult } from '../../shared/wechat-send'
 import type { AppSettings } from './settings-store'
-import { generateAgentGroupReport } from './agent-group-report-service'
 import { AIProviderService } from './ai-provider-service'
 import { QueryAgentService } from './query-agent-service'
 import { AskWechatService } from './ask-wechat-service'
@@ -20,8 +19,7 @@ import {
   formatWechatReplyText,
   queryAgentReplyText,
   resolveInboundRoute,
-  type GroupMemberChatIntent,
-  type GroupReportIntent
+  type GroupMemberChatIntent
 } from './agent-hub-routing'
 import {
   getGroupSnapshot,
@@ -643,14 +641,8 @@ export class AgentHubService {
       this.addLog(
         'agent-hub',
         'info',
-        `匹配群聊总结：${route.intent.group}（${route.intent.range}）`
+        `日报已关闭，忽略群聊总结请求：${route.intent.group}（${route.intent.range}）`
       )
-      await this.sendToConversation(conversation, '收到！正在生成群聊总结，请等待…').catch(
-        (error) => {
-          this.addLog('agent-hub', 'warn', `等待提示发送失败：${this.errorMessage(error)}`)
-        }
-      )
-      void this.generateAndSendReport(conversation, route.intent)
       return
     }
 
@@ -849,33 +841,6 @@ export class AgentHubService {
     if (normalized) return normalized.length > 100 ? `${normalized.slice(0, 100)}…` : normalized
     const label = String(type || '消息').replace(/^普通文本$/, '消息')
     return `[${label}]`
-  }
-
-  private async generateAndSendReport(
-    conversation: AgentHubTarget,
-    intent: GroupReportIntent
-  ): Promise<void> {
-    // 日报是长任务：确认语已由路由层发出，这里叠加原生"正在输入"直到图片发完。
-    const typing = await this.beginTypingFor(conversation)
-    try {
-      const result = await generateAgentGroupReport({ group: intent.group, range: intent.range })
-      if (!result.success || !result.pngPath) throw new Error(result.error || '群聊总结生成失败')
-      await this.sendToConversation(
-        conversation,
-        `已生成${result.groupName || intent.group}的群聊总结（${result.messageCount || 0} 条消息），正在发送图片。`
-      )
-      await this.sendToConversation(conversation, undefined, result.pngPath)
-      this.addLog('agent-hub', 'info', `群聊总结图片已发送：${result.groupName || intent.group}`)
-    } catch (error) {
-      const message = this.errorMessage(error)
-      this.addLog('agent-hub', 'error', `群聊总结生成失败：${message}`)
-      await this.sendToConversation(conversation, `群聊总结生成失败：${message}`).catch(
-        () => undefined
-      )
-    } finally {
-      // 生成失败、图片发送失败、超时……都必须收掉"正在输入"。
-      await typing.stop()
-    }
   }
 
   /* ------------------------------------------------------------------ */

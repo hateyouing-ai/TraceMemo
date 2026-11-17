@@ -990,6 +990,7 @@ function createWindow(): void {
     height: initialHeight,
     minWidth: 960,
     minHeight: 640,
+    title: `TraceMemo ${app.getVersion()} 定制版`,
     center: true,
     show: false,
     autoHideMenuBar: true,
@@ -2852,7 +2853,8 @@ app.whenReady().then(async () => {
       disabled: '这条定时日报已停用，请先启用再执行',
       target_needs_review: '这条规则的发送目标需要重新选择后才能执行',
       in_flight: '这条规则正在执行中，请稍后再试',
-      store_error: '读取规则失败，请稍后再试'
+      store_error: '读取规则失败，请稍后再试',
+      feature_disabled: '定制版已关闭日报。这条定时日报规则仍保留，但不会再生成或发送。'
     }
     return {
       success: false,

@@ -38,7 +38,6 @@ describe('chat menus', () => {
     const user = userEvent.setup()
     const onContentFilterChange = vi.fn()
     const onRefresh = vi.fn()
-    const onOpenAiSettings = vi.fn()
     renderWithTooltip(
       <ChatHeader
         contact={contact}
@@ -46,11 +45,9 @@ describe('chat menus', () => {
         loadedCount={8}
         filteredCount={2}
         contentFilter=""
-        isAiLoading={false}
         onContentFilterChange={onContentFilterChange}
         onRefresh={onRefresh}
         onTestSend={vi.fn()}
-        onOpenAiSettings={onOpenAiSettings}
       />
     )
 
@@ -66,9 +63,8 @@ describe('chat menus', () => {
     expect(screen.queryByRole('textbox', { name: '搜索当前聊天内容' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '刷新聊天记录' }))
-    await user.click(screen.getByRole('button', { name: '生成 AI 日报' }))
     expect(onRefresh).toHaveBeenCalledOnce()
-    expect(onOpenAiSettings).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: '生成 AI 日报' })).not.toBeInTheDocument()
   })
 
   it('preserves status switch, reload, and jump callbacks', async () => {

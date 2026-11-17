@@ -4,6 +4,10 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import type { AgentHubStatus } from '../../shared/agent-hub'
 import {
+  DAILY_REPORT_DISABLED_MESSAGE,
+  DAILY_REPORT_EXECUTION_ENABLED
+} from '../../shared/daily-report-feature'
+import {
   AUTOMATION_RULE_TYPE_LABELS,
   calculateNextRunAt,
   isValidScheduleTime,
@@ -102,6 +106,8 @@ export interface ScheduledReportDependencies {
   /** 数据库未就绪时不调度：目标解析必然失败，跑了只会留下误导性的失败记录。 */
   isDatabaseReady: () => boolean
   now?: () => Date
+  /** 测试可显式打开。产品默认关闭，到点不执行、也不发送异常通知。 */
+  reportExecutionEnabled?: boolean
 }
 
 const defaultDependencies = (): ScheduledReportDependencies => ({
@@ -151,11 +157,13 @@ export class ScheduledReportService {
   private notifications: ScheduledReportNotification[] | null = null
   private notificationSettings: ScheduledReportNotificationSettings | null = null
   private timer: NodeJS.Timeout | null = null
+  private readonly reportExecutionEnabled: boolean
   /** 已 fire-and-forget 起飞的执行（仅用于测试等待；不影响业务语义）。 */
   private readonly pending = new Set<Promise<unknown>>()
 
   constructor(deps?: Partial<ScheduledReportDependencies>) {
     this.deps = { ...defaultDependencies(), ...deps }
+    this.reportExecutionEnabled = deps?.reportExecutionEnabled ?? DAILY_REPORT_EXECUTION_ENABLED
   }
 
   // ---------------------------------------------------------------------------
@@ -164,6 +172,7 @@ export class ScheduledReportService {
 
   async start(): Promise<void> {
     await this.load()
+    if (!this.reportExecutionEnabled) return
     if (this.timer) return
     await this.flushNotifications()
     this.timer = setInterval(() => {
@@ -201,6 +210,7 @@ export class ScheduledReportService {
    * - 这里**只负责**"读规则 → 判断到点 → 触发 → 失败时推异常通知"。
    */
   async tick(at = this.deps.now?.() || new Date()): Promise<void> {
+    if (!this.reportExecutionEnabled) return
     await this.load()
     await this.flushNotifications()
     if (!this.deps.isDatabaseReady()) return
@@ -260,7 +270,12 @@ export class ScheduledReportService {
    *
    * **不消耗槽位**：手动执行不该导致今天不再定时跑。
    */
-  async runScheduledReportNow(ruleId: string): Promise<ScheduledReportResult<ScheduledReportExecution>> {
+  async runScheduledReportNow(
+    ruleId: string
+  ): Promise<ScheduledReportResult<ScheduledReportExecution>> {
+    if (!this.reportExecutionEnabled) {
+      return { success: false, error: DAILY_REPORT_DISABLED_MESSAGE }
+    }
     await this.load()
     const rule = this.findRule(ruleId)
     if (!rule) return { success: false, error: '未找到定时日报规则' }

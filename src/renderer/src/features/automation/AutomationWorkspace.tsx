@@ -9,6 +9,7 @@ import {
   type AutomationRuleDraft,
   type AutomationStatusSummary
 } from '../../../../shared/automation'
+import { DAILY_REPORT_DISABLED_MESSAGE } from '../../../../shared/daily-report-feature'
 import {
   Button,
   SegmentedControl,
@@ -483,12 +484,17 @@ export function AutomationWorkspace({
         <div>
           <h1>自动化</h1>
           <p>当群里出现符合条件的消息时，TraceMemo 会自动执行你配置的动作。</p>
+          <p className="automation-section-lead" data-testid="daily-report-disabled-notice">
+            {DAILY_REPORT_DISABLED_MESSAGE}
+          </p>
         </div>
         <div className="automation-page-header-actions">
           {/* 微信消息插入开关：控制 TraceMemo 能在微信会话里插入哪些消息 */}
           <MessageInsertSwitches />
           {tab === 'rules' && !showEditor ? (
             <Button
+              disabled
+              title={DAILY_REPORT_DISABLED_MESSAGE}
               onClick={() => {
                 lastDailyTargetRef.current = null
                 setEditor({ mode: 'create', rule: null, ruleType: 'daily_report' })

@@ -606,7 +606,7 @@ export interface ScheduledRuleRunOutcome {
   /**
    * 未执行的原因（机器可读）：
    * `missing_rule` / `rule_not_found` / `disabled` / `target_needs_review` /
-   * `in_flight` / `store_error` / `database_not_ready`。
+   * `in_flight` / `store_error` / `database_not_ready` / `feature_disabled`。
    */
   reason?: string
 }
